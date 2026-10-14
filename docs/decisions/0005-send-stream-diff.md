@@ -17,4 +17,5 @@ Run `BTRFS_IOC_SEND` with `BTRFS_SEND_FLAG_NO_FILE_DATA` and a parent snapshot, 
 ## Consequences
 - Both snapshots must be read-only (they are).
 - Requires `CAP_SYS_ADMIN`, which is already needed.
-- The stream gives paths at the end of the interval; renames inside the interval are resolved by the parser's path tracking.
+- The stream gives paths at the end of the interval; renames inside the interval are resolved by the parser's path tracking. P1 confirmed that new files arrive under orphan names `o<ino>-<gen>-0` and are renamed into place.
+- P1 numbers: a 16-package install produced 176,980 commands, an 18 MB stream in 3.7 s; a 1-package install produced 459 commands in 50 ms. `find-new` missed every deletion in both. Diffs are therefore computed eagerly after each checkpoint and cached in the ledger.

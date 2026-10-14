@@ -17,7 +17,7 @@
 | Object | How it's restored |
 | ------ | ----------------- |
 | Text config with a blob | write `B` to a temp file in the same dir, set owner/mode/xattrs/SELinux label from the ledger, `fsync`, `renameat2(RENAME_EXCHANGE)` then unlink, all via `openat2(RESOLVE_BENEATH \| RESOLVE_NO_SYMLINKS)` |
-| File without a blob | reflink (`FICLONE`) from the newest checkpoint that has version `B`, then the same metadata steps _(verify: FICLONE across subvolumes mounted at different points)_ |
+| File without a blob | reflink (`FICLONE`) from the newest checkpoint that has version `B`, then the same metadata steps (verified in P1: FICLONE works across mount points of the same filesystem) |
 | Deleted file | same as above, from the checkpoint before deletion |
 | Created file | move to `/var/lib/osreflog/attic/` (recoverable), never unlink directly |
 | Unit enablement | `systemctl enable/disable` via the systemd D-Bus API (pid 1 owns those symlinks) |

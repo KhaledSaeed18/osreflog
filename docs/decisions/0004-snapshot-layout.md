@@ -1,6 +1,6 @@
 # 0004: Snapshots as top-level siblings, ledger in its own subvolume
 
-- Status: Proposed. P1 verifies the private mount and cross-mount reflink (Q2, Q8)
+- Status: Accepted 2026-10-15. P1 verified the private mount (invisible in PID 1's namespace) and cross-mount reflink
 - Date: 2026-10-14
 
 ## Context

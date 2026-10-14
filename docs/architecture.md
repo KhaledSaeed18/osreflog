@@ -89,11 +89,15 @@ btrfs top level (subvolid=5, never mounted in the user's namespace)
 - `/boot` config (BLS entries, `grubenv`, `grub.cfg`) is tracked as content blobs in the ledger, because snapshots can't cover it. Kernel images are package-owned and come back through dnf.
 - Blob store: content-addressed by BLAKE3 and zstd-compressed. Only for text-like config files under live-capture scopes, < 1 MiB, and not on the secrets denylist ([threat-model.md](./threat-model.md)).
 
+Checkpoint cost (P1): 53–173 ms on an idle system, 0.4–0.9 s from the dnf pre-transaction hook, and **5.3 s right after a 435 MiB transaction**, because btrfs flushes the transaction's dirty data first. The post-transaction checkpoint runs after rpm has finished, so it delays dnf's exit but never the package writes.
+
+**Noise filter.** Even a one-package transaction touched 273 paths under `/var` (dnf caches, logs, the rpm database). The cause view hides `/var/cache`, `/var/log` and package-database files by default; the state record keeps everything, and `--all` shows it.
+
 Retention (defaults, configurable): keep every checkpoint for 48 h, daily for 14 days, weekly for 8 weeks, plus pinned ones (`boot-ok` linked to a bisect, user-pinned). The ledger is kept forever (it's small); blobs are pruned once no remaining checkpoint or cause needs them.
 
 ## Diffing
 
-1. **Structural** (what): `btrfs send --no-data -p <older> <newer>` produces a command stream (`mkfile`, `rename`, `unlink`, `update_extent`, `chmod`, `chown`, `set_xattr`, …) without file data. osreflog parses this stream itself (protocol v2) rather than running a full rsync-style scan. See [ADR 0005](./decisions/0005-send-stream-diff.md).
+1. **Structural** (what): `btrfs send --no-data -p <older> <newer>` produces a command stream (`mkfile`, `rename`, `unlink`, `update_extent`, `chmod`, `chown`, `set_xattr`, …) without file data. osreflog parses this stream itself (protocol v2) rather than running a full rsync-style scan. See [ADR 0005](./decisions/0005-send-stream-diff.md). The diff is computed **eagerly** right after each checkpoint and cached in the ledger: a large transaction took 3.7 s to send in P1, too slow to run on demand.
 2. **Package** (which packages): diff the RPM database (`/usr/lib/sysimage/rpm/rpmdb.sqlite`) between the two snapshots, and pull transaction metadata from `/usr/lib/sysimage/libdnf5/transaction_history.sqlite`. Files owned by a changed package fold into that package's cause instead of being listed one by one.
 3. **Semantic** (what it means): per-format differs in the sandboxed `osreflog-parse` worker:
 
@@ -124,7 +128,7 @@ See [undo.md](./undo.md). It's a 3-way check (ledger "before", ledger "after", c
 
 - **D-Bus** system service `io.github.khaledsaeed18.osreflog` (zbus). Read methods (log, show, diff) are allowed for members of the `osreflog` group or via polkit `…read`. Mutating methods (`Checkpoint`, `Undo`, `Bisect*`) require polkit `…admin` (auth_admin_keep). See [ADR 0008](./decisions/0008-dbus-polkit.md).
 - **CLI** is a thin D-Bus client with git-like porcelain; `--json` on every read command.
-- **dnf5 hook**: an actions file in `/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions` calls `osreflog hook pre-transaction` / `post-transaction`. The call blocks until the snapshot exists _(verify: actions callbacks and blocking semantics in dnf5 5.4)_.
+- **dnf5 hook**: an actions file in `/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions` calls `osreflog hook pre-transaction ${pid}` / `post-transaction ${pid}`. P1 verified that both `dnf` and `packagekitd` (GNOME Software's PackageKit path) wait for the pre hook before rpm writes anything. GNOME Software's offline updates go through dnf5daemon-server and are applied at boot; until that path is tested (P2), they show up as `offline` causes from the boot-time diff.
 
 ## Repo layout (planned)
 
