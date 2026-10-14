@@ -11,34 +11,35 @@ The live witness answers *who* and *why* at the moment of a change. It must work
 
 The daemon joins them: fanotify's pid (+ start time, to defeat pid reuse) → the lineage cache → the chain of ancestors up to a unit, a session or a dnf transaction. Exited pids stay in the cache for a grace period (default 30 s), so events that arrive late still resolve.
 
-Why not one source? See [ADR 0003](./decisions/0003-fanotify-plus-ebpf-lineage.md). In short:
+Why not one source? See [ADR 0003](./decisions/0003-fanotify-plus-ebpf-lineage.md). In P1, 23 % of processes during a dnf transaction lived under 1 ms and 67 % under 10 ms, and fatrace failed to read the exe for 2 % of events because the writer had already exited. In short:
 - fanotify is a stable ABI built for exactly this. It reports directory entry events with file handles, and the kernel coalesces events. It doesn't keep the actor alive or describe it.
 - eBPF on exec/fork is small and robust, and gives full lineage even for processes that exit in microseconds.
 - BPF LSM path hooks (`path_unlink`, `path_rename`, `file_open` with write mode) could do both in one place, synchronously, in the actor's context. BPF LSM is active on this host (`lsm=…,bpf,…`). It stays the **alternative** we measure in P1 rather than the default: it ties correctness to verifier-sensitive path reconstruction in BPF, and a bug there loses events silently.
 
-## Scopes
+## Marks and scopes
 
-Watching everything is neither needed nor cheap. `/` and `/home` share one btrfs filesystem, so a filesystem-wide fanotify mark would also deliver every browser-cache write in `/home`.
+**One filesystem mark, filtered in userspace** (decided in P1, [journal](./journal/p1-measure.md#q1-live-capture-scope-strategy--one-filesystem-mark-filter-in-userspace)). `/` and `/home` share one btrfs filesystem, so a single `FAN_MARK_FILESYSTEM` on its superblock sees both subvolumes, and new directories need no extra marks. Measured on this laptop over 20 minutes of normal use: 9.1 events/s for the whole filesystem, 80 % of them `FAN_MODIFY`, which we don't subscribe to. The remaining rate is a few events per second, cheap to filter in userspace. `/boot` and `/boot/efi` are separate filesystems and get their own marks.
 
-Default live-capture scopes (system daemon):
+Scopes decide what is *recorded*, not what is marked:
 
-| Scope | Why | Mark strategy |
-| ----- | --- | ------------- |
-| `/etc` | the main config surface (≈ 480 dirs on this host) | recursive inode marks; new dirs marked on `FAN_CREATE \| FAN_ONDIR` |
-| `/boot/loader/entries`, `/boot/grub2`, `/boot/efi/EFI/fedora` | boot config, not covered by snapshots | inode marks (separate filesystems) |
-| `/usr/local`, `/opt` | hand-installed software | recursive inode marks |
-| `/var/lib/{NetworkManager,bluetooth,fwupd,AccountsService}` (configurable) | state that shapes behaviour | recursive inode marks |
-| `/usr` (≈ 18 k dirs) | package-owned | **not live-watched.** Covered by the dnf hook brackets + rpmdb diff + send-stream diff. Changes to `/usr` outside a dnf cause appear as `offline`/unattributed, which is itself a finding. |
+| Scope | Recorded as |
+| ----- | ----------- |
+| `/etc`, `/usr/local`, `/opt`, `/var/lib/{NetworkManager,bluetooth,fwupd,AccountsService}` (configurable) | changes with content blobs |
+| `/boot/loader/entries`, `/boot/grub2`, `/boot/efi/EFI/fedora` | changes with content blobs (snapshots don't cover `/boot`) |
+| `/usr` | changes without content, folded into the `dnf` cause when inside a bracket. A `/usr` write *outside* a dnf cause is a finding and is shown on its own |
+| `/var/cache`, `/var/log`, the rpm/libdnf5 databases, `/home` | ignored by the system daemon (noise, or the user agent's job). Still covered by the state witness |
 
-Events: `FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_ATTRIB | FAN_CLOSE_WRITE | FAN_ONDIR`, init flags `FAN_REPORT_DFID_NAME_TARGET | FAN_REPORT_PIDFD`, `FAN_UNLIMITED_MARKS | FAN_UNLIMITED_QUEUE` (root). `FAN_CLOSE_WRITE` (not `FAN_MODIFY`) is the content trigger: one event per write session, and the file is complete when we read it.
+Events: `FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_ATTRIB | FAN_CLOSE_WRITE | FAN_ONDIR`, init flags `FAN_REPORT_DFID_NAME_TARGET | FAN_REPORT_PIDFD | FAN_UNLIMITED_QUEUE`. `FAN_CLOSE_WRITE` (not `FAN_MODIFY`) is the content trigger: one event per write session, and the file is complete when we read it.
 
-Open alternative ([open-questions Q1](./open-questions.md)): a filesystem mark with in-kernel filtering. Ignore marks (`FAN_MARK_IGNORE`, kernel ≥ 6.0) aren't recursive, so this would need the BPF-filter-for-fanotify work, if it has landed _(verify on 7.2)_. Decide in P1 from measured event rates.
+**Resolve by handle, never by path string.** In P1, fatrace ran in a private mount namespace with the btrfs top level mounted, and every event path came back through that mount (`/run/…/top/root/etc/…`). osreflogd has the same layout, so it resolves each event from its directory file handle with `open_by_handle_at`, against a mount fd chosen per subvolume (the `root` subvolume as `/`, `home` as `/home`), and derives the logical path from that.
+
+Re-measure under heavy browser load in P3. If userspace filtering ever becomes the bottleneck, the fallback is BPF LSM hooks with in-kernel filtering (see ADR 0003).
 
 ## Building causes
 
 Rules, in priority order, applied to the actor's lineage (nearest ancestor wins):
 
-1. **Inside a dnf bracket**: the hook recorded `pre-transaction` with dnf's pid. Any descendant (rpm, scriptlets, `systemctl preset`, `dracut`, `grub2-mkconfig`) → the `dnf` cause. Writes to `/usr` are expected and folded in.
+1. **Inside a dnf bracket**: the hook recorded `pre-transaction` with the package manager's pid (`dnf` or `packagekitd`; both run libdnf5 plugins, verified in P1). Any descendant (rpm, scriptlets, `systemctl preset`, `dracut`, `grub2-mkconfig`) → the `dnf` cause. Writes to `/usr` are expected and folded in.
 2. **osreflogd itself** (undo, probe setup) → the `undo` cause, or ignored for probe clones (they live outside `/`).
 3. **System unit**: the actor's cgroup path is `/system.slice/<unit>` → a `unit` cause per unit, closed after a quiet period.
 4. **Login session / user scope**: lineage reaches `session-N.scope` or a terminal app scope (`app-…-<terminal>-….scope`, the same cgroup naming drainscope uses) → a `command` cause, labelled with the outermost command under the shell (e.g. `sudo vim /etc/hosts`). `sudo`/`pkexec`/`run0` record both the invoking user and the target user.
@@ -62,7 +63,7 @@ Rules, in priority order, applied to the actor's lineage (nearest ancestor wins)
 
 On `FAN_CLOSE_WRITE` or `FAN_MOVED_TO` for an in-scope regular file:
 
-1. Open it with `openat2(dirfd, name, RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH)` relative to the event's directory handle (`open_by_handle_at`). Never follow a path string.
+1. Open it with `openat2(dirfd, name, RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH)`, where `dirfd` comes from the event's directory handle (`open_by_handle_at`). Never follow a path string.
 2. If it's < 1 MiB, looks like text, and isn't on the secrets denylist → zstd blob, BLAKE3 id. Otherwise store size + hash + mode only.
 3. The "before" content is the previous blob for that path, or for the first sighting, the file as it is in the latest checkpoint (read through the private top-level mount).
 

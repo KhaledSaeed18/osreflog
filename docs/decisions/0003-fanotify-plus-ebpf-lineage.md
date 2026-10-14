@@ -1,13 +1,14 @@
 # 0003: fanotify for events, eBPF for process lineage
 
-- Status: Proposed. P1 measures event rates and confirms (open question Q1)
+- Status: Accepted 2026-10-15 after P1, amended: one filesystem mark instead of recursive inode marks
 - Date: 2026-10-14
 
 ## Context
 We need the changed object, the operation, and the actor's identity and ancestry, including for processes that exit within microseconds (`sed -i`, rpm scriptlets).
 
 ## Decision
-- **fanotify** with recursive inode marks on scope trees, `FAN_REPORT_DFID_NAME_TARGET | FAN_REPORT_PIDFD`, `FAN_CLOSE_WRITE` as the content trigger.
+- **fanotify** with one `FAN_MARK_FILESYSTEM` on the btrfs superblock (plus `/boot`, `/boot/efi`), `FAN_REPORT_DFID_NAME_TARGET | FAN_REPORT_PIDFD`, `FAN_CLOSE_WRITE` as the content trigger, scope filtering in userspace. Events are resolved by file handle, not path string.
+- P1 numbers ([journal](../journal/p1-measure.md)): 9.1 events/s system-wide over 20 min of normal use (80 % `FAN_MODIFY`, not subscribed); 2 % of events had already lost their writer by the time userspace looked.
 - **eBPF** tracepoints `sched_process_fork/exec/exit` → ring buffer → a userspace pid+starttime lineage cache with an exit grace period.
 
 ## Alternatives considered
@@ -18,4 +19,5 @@ We need the changed object, the operation, and the actor's identity and ancestry
 
 ## Consequences
 - Two kernel interfaces to keep in sync, joined by pid + start time.
-- `/usr` isn't live-watched; it relies on dnf brackets + the state witness.
+- `/usr` is live-captured too (without content), so rpm writes outside a dnf bracket stand out.
+- The original plan (recursive inode marks per scope tree) is dropped: more code, more marks, and new directories race with mark creation.
