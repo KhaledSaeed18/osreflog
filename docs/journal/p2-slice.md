@@ -30,3 +30,19 @@ Decisions taken while planning:
 - **Root-only integration tests** run against a loopback btrfs image (`scripts/p2/it.sh`), never against the real disk. They also produce the committed send-stream fixtures.
 
 ## Log
+
+### 2026-10-15: code complete, waiting for the root run
+
+Built: six crates, 46 tests (all pass), zero clippy warnings at `pedantic`.
+
+- **Parser validated on real kernel streams.** Against both P1 streams, every CRC verifies (so the CRC convention is right: raw CRC-32C, seed 0, no final inversion), and the command counts match `btrfs receive --dump` exactly. No orphan name survives into a change set.
+- **Change sets are much smaller than raw paths.** For the 16-package install, 176,981 commands became 34,854 changes (P1's naive path count was 59,773); the one-package install became 38. Two rules do this:
+  - directories whose only change is their times, and something inside them changed, are dropped;
+  - a file *replaced in place* (deleted, then created at the same path, which is how rpm and editors save) is reported as a **modify**, not a delete plus a create. This was found while writing the integration test.
+- **rpmdb reader matches `rpm -qa`** exactly for all 2,154 installed packages (2.35 s including a 134 MB copy to tmpfs; inside the daemon the copy is a reflink). rpm's own `rpmvercmp` test vectors pass.
+- **Package sets are reused.** When the send stream shows no change under `/usr/lib/sysimage/rpm/`, the package set is linked to the previous checkpoint's instead of being read again.
+- **The ledger's hash chain stores each record next to its hash**, so `verify` detects both an edited chain and edited tables. Unit tests tamper with each and check that `verify` catches it.
+- **The dnf hook's stdout is a command channel.** In the actions plugin's plain mode, every stdout line is interpreted: `stop=<msg>` aborts the transaction, and unknown lines are logged as errors. The hook therefore prints only `log.INFO=`/`log.WARNING=` lines with control characters removed, and human-facing warnings go to stderr.
+- **Namespace guard, changed.** Comparing `/proc/self/ns/mnt` with PID 1's needs ptrace access to PID 1, which the hardened unit drops. The daemon now checks what actually matters: whether a mount at `/run/osreflog/top` would propagate. In the host namespace `/run` is `shared:14` here, so it refuses; under `PrivateMounts=yes` or `unshare --propagation private` the tag is absent, so it proceeds.
+
+The remaining exit check needs root, in one run: `sudo scripts/p2/verify.sh`. It runs the loopback test, installs, makes a real transaction (`dnf remove figlet`), and measures diff latency and idle cost.
