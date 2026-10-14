@@ -1,0 +1,24 @@
+// osreflog P1: how many processes exec, and how long do they live?
+// Lifetime = exec to exit of the main thread. Short-lived actors are the reason the
+// design keeps an eBPF lineage cache instead of reading /proc after a fanotify event.
+// Stop with SIGINT; maps are printed on exit.
+
+tracepoint:sched:sched_process_fork { @forks = count(); }
+
+tracepoint:sched:sched_process_exec {
+    @start[pid] = nsecs;
+    @execs = count();
+    @exec_comm[comm] = count();
+}
+
+tracepoint:sched:sched_process_exit /pid == tid && @start[pid]/ {
+    $us = (nsecs - @start[pid]) / 1000;
+    @life_us = hist($us);
+    @exits = count();
+    if ($us < 1000)   { @lt_1ms = count(); }
+    if ($us < 10000)  { @lt_10ms = count(); }
+    if ($us < 100000) { @lt_100ms = count(); }
+    delete(@start[pid]);
+}
+
+END { clear(@start); }

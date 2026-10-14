@@ -1,0 +1,12 @@
+[Unit]
+Description=osreflog P1 probe: report boot state, then power off
+After=multi-user.target
+
+[Service]
+# Type=exec, not oneshot: a oneshot in the boot transaction would keep the system
+# "starting" and make `is-system-running --wait` wait for itself.
+# The result goes to the console and to a file: /run/p1-out (bind-mounted by nspawn) or
+# /var/tmp inside the probe (read back from the VM clone). Consoles proved unreliable.
+Type=exec
+StandardOutput=journal+console
+ExecStart=/bin/sh -c 'state=$(systemctl is-system-running --wait); up=$(cut -d" " -f1 /proc/uptime); failed=$(systemctl list-units --failed --no-legend --plain | cut -d" " -f1 | tr "\n" " "); msg="P1-PROBE state=$state uptime=$up failed=$failed"; echo "$msg"; if [ -d /run/p1-out ]; then echo "$msg" > /run/p1-out/result; fi; echo "$msg" > /var/tmp/p1-result; systemctl poweroff'
