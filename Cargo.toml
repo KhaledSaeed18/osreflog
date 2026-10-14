@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/btrfs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/KhaledSaeed18/osreflog"
+publish = false
+
+[workspace.dependencies]
+osreflog-model = { path = "crates/model" }
+osreflog-btrfs = { path = "crates/btrfs" }
+osreflog-rpm = { path = "crates/rpm" }
+osreflog-ledger = { path = "crates/ledger" }
+
+anyhow = "1"
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+clap = { version = "4", features = ["derive"] }
+rustix = { version = "1", features = ["fs", "mount", "pipe", "process", "thread"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "time", "net", "signal"] }
+tracing = "0.1"
+tracing-journald = "0.3"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[workspace.lints.rust]
+# deny, not forbid: the btrfs ioctl module opts back in, nothing else may.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.release]
+lto = "thin"
