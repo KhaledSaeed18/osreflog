@@ -31,10 +31,10 @@ pub enum LayoutError {
     )]
     TopLevel(String),
     #[error(
-        "refusing to mount the btrfs top level in the host's mount namespace: run osreflogd \
-         under systemd (PrivateMounts=yes) or `unshare -m --propagation private`"
+        "refusing to mount the btrfs top level at {0}: mounts there propagate to the host \
+         (run osreflogd under systemd with PrivateMounts=yes, or `unshare -m --propagation private`)"
     )]
-    SharedNamespace,
+    WouldPropagate(String),
     #[error("{what}: {source}")]
     Io {
         what: String,
@@ -58,6 +58,8 @@ pub struct MountEntry {
     pub mount_point: String,
     pub fs_type: String,
     pub source: String,
+    /// Optional fields: propagation tags such as `shared:1` or `master:1`.
+    pub optional: Vec<String>,
 }
 
 fn unescape(s: &str) -> String {
@@ -94,6 +96,7 @@ pub fn parse_mountinfo(text: &str) -> Vec<MountEntry> {
                 mount_point: unescape(l.get(4)?),
                 fs_type: (*r.first()?).to_owned(),
                 source: unescape(r.get(1)?),
+                optional: l.iter().skip(6).map(|s| (*s).to_owned()).collect(),
             })
         })
         .collect()
@@ -113,14 +116,28 @@ pub fn mount_at(path: &Path) -> Result<MountEntry, LayoutError> {
         .ok_or_else(|| LayoutError::NotMounted(want.into_owned()))
 }
 
-/// Whether this process has its own mount namespace (not PID 1's).
+/// The mount that contains `path` (the longest mount point that is a prefix of it).
+#[must_use]
+pub fn containing_mount<'a>(mounts: &'a [MountEntry], path: &Path) -> Option<&'a MountEntry> {
+    mounts
+        .iter()
+        .filter(|m| path.starts_with(&m.mount_point))
+        .max_by_key(|m| Path::new(&m.mount_point).components().count())
+}
+
+/// Whether a mount created at `path` would propagate to other mount namespaces: true when
+/// the mount containing it is in a `shared` peer group. Under systemd's `PrivateMounts=yes`
+/// mounts are slaves (`master:N`), and after `unshare --propagation private` they carry no
+/// tag; in the host's namespace `/run` is `shared`.
 ///
 /// # Errors
-/// If the namespace links can't be read.
-pub fn in_private_namespace() -> Result<bool, LayoutError> {
-    let own = fs::read_link("/proc/self/ns/mnt").map_err(io("reading /proc/self/ns/mnt"))?;
-    let init = fs::read_link("/proc/1/ns/mnt").map_err(io("reading /proc/1/ns/mnt"))?;
-    Ok(own != init)
+/// If mountinfo can't be read.
+pub fn would_propagate(path: &Path) -> Result<bool, LayoutError> {
+    let text =
+        fs::read_to_string("/proc/self/mountinfo").map_err(io("reading /proc/self/mountinfo"))?;
+    let mounts = parse_mountinfo(&text);
+    Ok(containing_mount(&mounts, path)
+        .is_none_or(|m| m.optional.iter().any(|o| o.starts_with("shared:"))))
 }
 
 fn open_dir(path: &Path) -> Result<File, LayoutError> {
@@ -159,11 +176,10 @@ impl Layout {
         if subvolume.is_empty() {
             return Err(LayoutError::TopLevel(root.display().to_string()));
         }
-        if !in_private_namespace()? {
-            return Err(LayoutError::SharedNamespace);
-        }
-
         fs::create_dir_all(top).map_err(io(format!("creating {}", top.display())))?;
+        if would_propagate(top)? {
+            return Err(LayoutError::WouldPropagate(top.display().to_string()));
+        }
         let mounted = mount_at(top).is_ok_and(|m| m.source == entry.source && m.fs_root == "/");
         if !mounted {
             mount(
@@ -272,10 +288,26 @@ mod tests {
                 fs_root: "/root".into(),
                 mount_point: "/".into(),
                 fs_type: "btrfs".into(),
-                source: "/dev/sda3".into()
+                source: "/dev/sda3".into(),
+                optional: vec!["shared:1".into()],
             }
         );
         assert_eq!(m[2].fs_type, "ext4");
         assert_eq!(m[3].mount_point, "/mnt/my disk");
+        assert_eq!(m[3].optional, Vec::<String>::new());
+    }
+
+    #[test]
+    fn finds_the_containing_mount() {
+        let mounts = parse_mountinfo(
+            "1 0 0:1 / / rw - btrfs /dev/sda3 rw\n\
+             2 1 0:2 / /run rw shared:5 - tmpfs tmpfs rw\n\
+             3 2 0:3 / /run/user/1000 rw master:7 - tmpfs tmpfs rw\n",
+        );
+        let at = |p: &str| containing_mount(&mounts, Path::new(p)).map(|m| m.mount_point.clone());
+        assert_eq!(at("/run/osreflog/top").as_deref(), Some("/run"));
+        assert_eq!(at("/run/user/1000/x").as_deref(), Some("/run/user/1000"));
+        assert_eq!(at("/runner").as_deref(), Some("/"));
+        assert_eq!(at("/etc").as_deref(), Some("/"));
     }
 }
