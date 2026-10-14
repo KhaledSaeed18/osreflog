@@ -15,7 +15,6 @@ Each question is answered by a measurement or decision in the phase noted, then 
 | Q7 | VM tier boot path | dracut module and cmdline for virtiofs root with Fedora's modular `virtio_fs`; one cached initramfs per kernel version; boot time and RSS | P1 |
 | Q8 | Cross-mount reflink | `FICLONE` from a snapshot under the private top-level mount into `/` (same filesystem, different mount points) | P1 |
 | Q9 | Replay soundness | When a cause has no blob for a path, how often does replay from `cB` differ from the true state? Instrument in the seeded suite | P6 |
-| Q10 | Flatpak | System Flatpaks live in an OSTree repo under `/var/lib/flatpak`. Attribute via `flatpak` lineage + ostree refs diff, or treat as out of scope for v1? | P4 |
 | Q12 | Ledger schema evolution | Migrations with `user_version`; the hash chain must cover the logical record, not the SQLite row layout | P2 |
 
 ## Resolved
@@ -25,3 +24,4 @@ Each question is answered by a measurement or decision in the phase noted, then 
 | R1 | Project name | **osreflog** | [ADR 0009](./decisions/0009-name-osreflog.md), [naming/](./naming/) |
 | R2 | Language and core libraries | Rust; aya, zbus, rusqlite (drainscope's stack) | [ADR 0001](./decisions/0001-rust-drainscope-stack.md) |
 | R3 | License | GPL-3.0-or-later, same as drainscope (decided 2026-10-14) | [LICENSE](../LICENSE) |
+| R4 | Flatpak in v1 | Out of scope for v1: Flatpak has its own history and rollback (`flatpak history`, `flatpak update --commit`). Writes under `/var/lib/flatpak` are recognized and summarised as one opaque `flatpak` cause, never diffed. Revisit after P6 | this table (2026-10-14) |

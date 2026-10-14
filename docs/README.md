@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** Phase 0 (planning). No code yet. Last updated 2026-10-14.
+**Status:** P1 (measure by hand) in progress; P0 closed 2026-10-14. No Rust code yet. Last updated 2026-10-14.
 
 ## Reading order
 
@@ -25,7 +25,7 @@
 | [decisions/](./decisions/) | Architecture Decision Records (ADRs) |
 | [research/](./research/) | [Related work](./research/related-work.md); research tracks are added as they start |
 | [naming/](./naming/) | The name-check report that led to "osreflog" |
-| `journal/` | One entry per phase (created when P1 starts) |
+| [journal/](./journal/) | One entry per phase: what worked, what broke, what changed |
 
 ## Conventions
 

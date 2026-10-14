@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **planning**. No phase has started. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P1 in progress** (started 2026-10-14). P0 closed 2026-10-14. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -12,15 +12,15 @@ The order is deliberate: **measure before designing in stone, read-only before w
 
 ---
 
-## P0: Planning (current)
+## P0: Planning (closed 2026-10-14)
 - [x] Idea, constraints, host facts ([environment.md](./environment.md))
 - [x] Name chosen ([naming/](./naming/))
 - [x] Vision, architecture, capture, bisect, undo, threat model drafts
-- [ ] Review all docs; resolve or park every item in [open-questions.md](./open-questions.md)
+- [x] Review all docs; resolve or park every item in [open-questions.md](./open-questions.md). The owner delegated decisions; Q10 resolved, the rest are P1+ measurements
 
 **Exit:** docs reviewed; Phase 1 checklist agreed.
 
-## P1: Measure by hand
+## P1: Measure by hand (current)
 Learn the primitives with existing tools before writing Rust.
 - `btrfs subvolume snapshot -r` by hand from a private mount of the top level (`mount -o subvolid=5` in `unshare -m`); time it
 - `btrfs send --no-data -p` between two snapshots around a `dnf upgrade`; save the stream; read it with `btrfs receive --dump`
