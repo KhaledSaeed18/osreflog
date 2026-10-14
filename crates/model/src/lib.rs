@@ -3,6 +3,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The daemon's D-Bus names and polkit actions.
+pub mod bus {
+    pub const NAME: &str = "io.github.khaledsaeed18.osreflog1";
+    pub const PATH: &str = "/io/github/khaledsaeed18/osreflog1";
+    pub const INTERFACE: &str = "io.github.khaledsaeed18.osreflog1";
+    pub const ERROR_PREFIX: &str = "io.github.khaledsaeed18.osreflog1.Error";
+    /// Reading history: active local sessions.
+    pub const ACTION_READ: &str = "io.github.khaledsaeed18.osreflog.read";
+    /// Taking a checkpoint by hand: admin authentication, kept for a while.
+    pub const ACTION_CHECKPOINT: &str = "io.github.khaledsaeed18.osreflog.checkpoint";
+}
+
 /// Why a checkpoint was taken.
 pub mod reason {
     pub const PRE_DNF: &str = "pre-dnf";
