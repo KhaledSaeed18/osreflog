@@ -1,0 +1,33 @@
+[package]
+name = "osreflogd"
+description = "The osreflog daemon: checkpoints, send-stream diffs and the ledger, served on the system bus."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+osreflog-btrfs.workspace = true
+osreflog-ledger.workspace = true
+osreflog-model.workspace = true
+osreflog-rpm.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-journald.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
