@@ -68,6 +68,7 @@ struct SubvolInfoArgs {
 }
 
 const SNAP_CREATE_V2: Opcode = opcode::write::<VolArgsV2>(MAGIC, 23);
+const SUBVOL_CREATE_V2: Opcode = opcode::write::<VolArgsV2>(MAGIC, 24);
 const SEND: Opcode = opcode::write::<SendArgs>(MAGIC, 38);
 const GET_SUBVOL_INFO: Opcode = opcode::read::<SubvolInfoArgs>(MAGIC, 60);
 const SNAP_DESTROY_V2: Opcode = opcode::write::<VolArgsV2>(MAGIC, 63);
@@ -79,6 +80,7 @@ const _: () = {
     assert!(std::mem::offset_of!(SubvolInfoArgs, generation) == 280);
     assert!(std::mem::offset_of!(SubvolInfoArgs, otime) == 392);
     assert!(SNAP_CREATE_V2 as u64 == 0x5000_9417);
+    assert!(SUBVOL_CREATE_V2 as u64 == 0x5000_9418);
     assert!(SNAP_DESTROY_V2 as u64 == 0x5000_943f);
     assert!(SEND as u64 == 0x4048_9426);
     assert!(GET_SUBVOL_INFO as u64 == 0x81f8_943c);
@@ -125,6 +127,17 @@ pub fn create_snapshot(
     // SAFETY: SNAP_CREATE_V2 takes a `btrfs_ioctl_vol_args_v2`, which `VolArgsV2` mirrors
     // (size and offsets asserted above); the kernel only reads it.
     unsafe { ioctl(dest_dir, Setter::<SNAP_CREATE_V2, VolArgsV2>::new(args)) }?;
+    Ok(())
+}
+
+/// Creates an empty subvolume `parent_dir/name`.
+///
+/// # Errors
+/// On a bad name or any ioctl failure.
+pub fn create_subvolume(parent_dir: BorrowedFd<'_>, name: &str) -> io::Result<()> {
+    let args = vol_args(name)?;
+    // SAFETY: SUBVOL_CREATE_V2 reads a `btrfs_ioctl_vol_args_v2`, as `create_snapshot` does.
+    unsafe { ioctl(parent_dir, Setter::<SUBVOL_CREATE_V2, VolArgsV2>::new(args)) }?;
     Ok(())
 }
 
