@@ -285,8 +285,12 @@ impl ChangeSetBuilder {
             note_parents(path);
         }
 
+        let mut deleted = self.deleted;
         for (path, node) in self.nodes {
             let op = match &node.origin {
+                // A new object where an old one was deleted: replaced in place (editors,
+                // rpm and most config tools write a new file and rename it over the old one).
+                None if deleted.remove(&path).is_some() => Op::Modify,
                 None => Op::Create,
                 Some(origin) if *origin != path => Op::Rename {
                     from: format!("/{origin}"),
@@ -298,15 +302,20 @@ impl ChangeSetBuilder {
                     Op::Modify
                 }
             };
+            let flags = if op == Op::Modify && node.origin.is_none() {
+                node.flags | flags::CONTENT
+            } else {
+                node.flags
+            };
             out.push(Change {
                 path: format!("/{path}"),
                 op,
                 kind: node.kind,
-                flags: node.flags,
+                flags,
                 bytes: node.bytes,
             });
         }
-        for (path, kind) in self.deleted {
+        for (path, kind) in deleted {
             out.push(Change {
                 path: format!("/{path}"),
                 op: Op::Delete,
@@ -440,6 +449,20 @@ mod tests {
             summary(&changes(&s)),
             ["modify /srv", "modify /var/log/messages"]
         );
+    }
+
+    #[test]
+    fn replaced_in_place_is_a_modify() {
+        // What `rpm` and editors do: write a new file, rename it over the old one.
+        let s = StreamWriter::new(2)
+            .path(cmd::UNLINK, "etc/hosts")
+            .path(cmd::MKFILE, "o500-9-0")
+            .update_extent("o500-9-0", 0, 30)
+            .rename("o500-9-0", "etc/hosts")
+            .finish();
+        let cs = changes(&s);
+        assert_eq!(summary(&cs), ["modify /etc/hosts"]);
+        assert_ne!(cs[0].flags & flags::CONTENT, 0);
     }
 
     #[test]
