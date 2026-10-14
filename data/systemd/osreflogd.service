@@ -1,0 +1,42 @@
+[Unit]
+Description=osreflog: system change history
+Documentation=https://github.com/KhaledSaeed18/osreflog
+After=local-fs.target dbus.service
+Requires=dbus.service
+
+[Service]
+Type=dbus
+BusName=io.github.khaledsaeed18.osreflog1
+ExecStart=/usr/local/libexec/osreflog/osreflogd
+# The btrfs top level is mounted at /run/osreflog/top in this namespace only; osreflogd
+# refuses to run in PID 1's mount namespace.
+PrivateMounts=yes
+RuntimeDirectory=osreflog
+RuntimeDirectoryMode=0700
+Nice=5
+
+# Hardening that P2 is known to work with; P8 tightens it (system call filter, SELinux).
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

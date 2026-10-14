@@ -1,0 +1,6 @@
+# osreflog: a checkpoint before and after every package transaction on this host.
+# Read by libdnf5-plugin-actions (dnf, PackageKit). The hook never fails a transaction and
+# prints only log.<LEVEL>= lines, as the plugin's plain mode requires.
+# callback:package_filter:direction:options:command
+pre_transaction:::enabled=host-only:/usr/local/bin/osreflog hook pre ${pid}
+post_transaction:::enabled=host-only:/usr/local/bin/osreflog hook post ${pid}
