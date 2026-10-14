@@ -2,7 +2,7 @@
 
 **A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.**
 
-> **Status: Phase 1, measuring by hand.** Design docs and P1 experiment scripts only; no Rust code yet. The commands below are the design target, not a working tool. See the [roadmap](docs/roadmap.md).
+> **Status: Phase 2 next (the read-only vertical slice).** P1 measured every primitive on real hardware ([journal](docs/journal/p1-measure.md)); there is no Rust code yet. The commands below are the design target, not a working tool. See the [roadmap](docs/roadmap.md).
 
 "It worked last week." Your Wi-Fi drops, suspend stops working, or an app won't start, and something changed in between. A package update, a config edit, a GNOME setting, a firmware update, a command you ran at 2 a.m. Linux can take snapshots of your system (Snapper, Timeshift), but none of them can tell you *what* changed between two snapshots, *what caused* each change, or *which one* broke things.
 
@@ -31,7 +31,7 @@ $ osreflog undo #2215 --dry-run
 
 ```
                   ┌────────────────────── osreflogd (root, Rust) ──────────────────────┐
- live witness ──► │ fanotify (scoped marks) + eBPF exec/fork lineage ──► cause builder │
+ live witness ──► │ fanotify (fs-wide mark) + eBPF exec/fork lineage ──► cause builder │
                   │ dnf5 actions hook · dnf5 history db · systemd units · D-Bus        │
                   │                              │                                     │
  state witness ─► │ btrfs checkpoints (read-only snapshots) ──► send-stream diff       │

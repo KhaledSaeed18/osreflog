@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P1 in progress** (started 2026-10-14). P0 closed 2026-10-14. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P2 next.** P0 closed 2026-10-14, P1 closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -20,7 +20,7 @@ The order is deliberate: **measure before designing in stone, read-only before w
 
 **Exit:** docs reviewed; Phase 1 checklist agreed.
 
-## P1: Measure by hand (current)
+## P1: Measure by hand (closed 2026-10-15)
 Learn the primitives with existing tools before writing Rust.
 - `btrfs subvolume snapshot -r` by hand from a private mount of the top level (`mount -o subvolid=5` in `unshare -m`); time it
 - `btrfs send --no-data -p` between two snapshots around a `dnf upgrade`; save the stream; read it with `btrfs receive --dump`
@@ -31,21 +31,24 @@ Learn the primitives with existing tools before writing Rust.
 - Boot a clone in QEMU: snapshot kernel + `dracut --no-hostonly` initramfs + virtiofs root; measure boot time and RSS
 - `cp --reflink` from a snapshot into `/` (cross-mount FICLONE)
 
-**Exit:** a reproducible `scripts/p1/` set plus a journal entry with numbers. Q1, Q2, Q4 and Q7 answered, and the (verify) markers in the docs updated.
+**Exit:** a reproducible `scripts/p1/` set plus a journal entry with numbers. Q1, Q2, Q4 and Q7 answered, and the (verify) markers in the docs updated. **Met** ([journal](./journal/p1-measure.md)): Q1, Q2, Q7, Q8 resolved; Q4 answered for dnf and PackageKit, with the offline-update path moved to P2.
 
-## P2: Vertical slice: state witness only
+## P2: Vertical slice: state witness only (next)
 The whole read-only path, with no live capture yet.
 - Cargo workspace, `osreflogd` + `osreflog` skeletons, D-Bus API (read methods), polkit policy
 - `btrfs` crate: snapshot/subvolume ioctls, send-stream (v2) parser with fixture streams from P1
 - Ledger: SQLite schema, checkpoints, refs (`@{1}`, `c42`), hash chain
 - dnf5 actions hook → `pre-dnf`/`post-dnf` checkpoints; rpmdb diff + dnf history import
 - `osreflog checkpoint`, `log`, `diff @{1}..@{0}` (structural + packages; unified diff fallback)
+- Diff computed eagerly after each checkpoint and cached in the ledger (P1: 3.7 s to send a large transaction); default noise filter for `/var/cache`, `/var/log`, package databases
+- Test fixtures from a loopback btrfs image (deterministic send streams), never from the real disk
+- Q4 remainder: GNOME Software offline updates via dnf5daemon-server; Q3: send-stream size estimates, squota evaluated on the loopback image
 - Retention policy and `osreflog doctor` (layout, space, hook installed)
 
 **Exit:** after a real `dnf upgrade`, `osreflog diff @{1}..@{0}` shows packages and changed files in < 2 s; the daemon idles at < 0.3 % CPU.
 
 ## P3: Live witness and causes
-- `capture` crate: fanotify with scoped recursive marks, dir handles, PIDFD
+- `capture` crate: one fanotify filesystem mark, scope filtering in userspace, resolution by dir handle (`open_by_handle_at`), PIDFD; re-measure event rates under heavy browser load
 - `lineage` + `lineage-ebpf` (aya): fork/exec/exit ring buffer, pid+starttime cache with grace period
 - Cause builder rules (dnf bracket, unit, session/command, unknown); quiet-period closing
 - Blob store (BLAKE3 + zstd) with secrets denylist and argv redaction

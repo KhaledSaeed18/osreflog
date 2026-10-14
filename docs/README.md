@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P1 (measure by hand) in progress; P0 closed 2026-10-14. No Rust code yet. Last updated 2026-10-14.
+**Status:** P2 (vertical slice) next; P1 closed 2026-10-15 ([journal](./journal/p1-measure.md)). No Rust code yet. Last updated 2026-10-15.
 
 ## Reading order
 
