@@ -42,19 +42,20 @@ Probe count: ⌈log₂(checkpoints)⌉ + ⌈log₂(causes in interval)⌉, versu
 
 | Tier | What it is | Can reproduce | Cost on this laptop |
 | ---- | ---------- | ------------- | ------------------- |
-| `nspawn` | `systemd-nspawn --ephemeral` (or a clone + `--directory`) on the probe; optional `--boot` to run systemd inside | userspace: binaries, libraries, config parsing, units that start in a container | ~seconds, tens of MB |
-| `vm` | QEMU/KVM, direct kernel boot of the probe's **own** kernel (`/usr/lib/modules/<ver>/vmlinuz` lives inside the snapshot on Fedora), root on **virtiofs** shared from the probe subvolume, headless, serial console + vsock for test I/O | kernel version, modules, boot sequence, systemd ordering, generic drivers (virtio) | ~10–30 s boot, 768 MiB RAM, 2 vCPU |
+| `nspawn` | `systemd-nspawn --ephemeral --private-network` (or a clone + `--directory`) on the probe; optional `--boot` to run systemd inside | userspace: binaries, libraries, config parsing, units that start in a container | P1: 0.4–0.55 s for a command, 26 s for a full boot + poweroff |
+| `vm` | QEMU/KVM, direct kernel boot of the probe's **own** kernel (`/usr/lib/modules/<ver>/vmlinuz` lives inside the snapshot on Fedora), root on **virtiofs** shared from the probe subvolume, headless, result file read back from the clone | kernel version, modules, boot sequence, systemd ordering, generic drivers (virtio) | P1: 34 s to `running`, 512 MiB guest, 615 MiB qemu RSS, 2 vCPU |
 | `metal` | one-time reboot of the real machine into a writable clone of the probe; you give the verdict after boot | anything hardware-specific: Wi-Fi, GPU, suspend, firmware interaction | minutes per probe + your attention |
 
 **Tier choice.** `--tier auto` (default) picks the cheapest tier whose capabilities match the test's declared needs (`--needs kernel`, `--needs hardware`), and suggests trying a cheaper tier first. A regression that doesn't reproduce in the chosen tier is reported as "good in vm on both ends: try metal" rather than a false answer.
 
 ### VM tier details
 
-- The kernel and modules come from the probe; the initramfs is built once per kernel version with `dracut --no-hostonly --add virtiofs` and cached in the ledger subvolume _(verify the dracut module name and that root=virtiofs tag boot works with Fedora's modular `virtio_fs`)_.
-- `virtiofsd` (1.14 on this host) runs sandboxed, sharing only the probe subvolume.
+- The kernel and modules come from the probe. The initramfs is built once per kernel version with `dracut --hostonly --no-hostonly-cmdline --omit plymouth --add virtiofs --add-drivers "virtiofs virtio_pci virtio_ring"` and cached in the ledger subvolume. Cmdline: `root=virtiofs:<tag> rw console=ttyS0 selinux=0`. P1 measured a 37 MiB image built in 13 s; the generic `--no-hostonly` image is 254 MiB and panics while unpacking in a 512 MiB guest ([journal](./journal/p1-measure.md#q7-vm-tier-boot-path--works-in-512-mib-with-a-host-only-initramfs)).
+- `virtiofsd` (1.14 on this host) runs sandboxed, sharing only the probe subvolume (4 MiB RSS in P1).
 - No network by default (`-nic none`); `--net user` opt-in for tests that need it.
-- Units known to fail in a VM (e.g. hardware-specific services) are masked in the probe by a small drop-in set, listed in the bisect log.
-- Budget: one probe at a time. 768 MiB guest RAM fits beside a GNOME session with ~1.5 GiB available on this host. If `MemAvailable` drops below a threshold, the probe waits.
+- Every probe (both tiers) gets `/etc/fstab` neutralized, or systemd waits for this host's disks by UUID. Units known to fail in a probe are listed in the bisect log and don't count as test failures: in P1 the VM had none, and the container failed only `auditd.service` and `audit-rules.service` (no audit in containers).
+- The verdict comes back through a **file**, not the console: a bind-mounted directory for nspawn, a file inside the clone for the VM. `--console=pipe` captured nothing from a booted container in P1.
+- Budget: one probe at a time, **512 MiB** guest RAM with a free-page-reporting balloon. P1: `running` at 34.2 s with 0 failed units, qemu peak RSS 615 MiB. If `MemAvailable` drops below a threshold, the probe waits.
 
 ### Metal tier details (behind the boot gate)
 
