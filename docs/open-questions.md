@@ -16,7 +16,6 @@ Each question is answered by a measurement or decision in the phase noted, then 
 | Q8 | Cross-mount reflink | `FICLONE` from a snapshot under the private top-level mount into `/` (same filesystem, different mount points) | P1 |
 | Q9 | Replay soundness | When a cause has no blob for a path, how often does replay from `cB` differ from the true state? Instrument in the seeded suite | P6 |
 | Q10 | Flatpak | System Flatpaks live in an OSTree repo under `/var/lib/flatpak`. Attribute via `flatpak` lineage + ostree refs diff, or treat as out of scope for v1? | P4 |
-| Q11 | License | Proposed: GPL-3.0-or-later, same as drainscope | P0 review |
 | Q12 | Ledger schema evolution | Migrations with `user_version`; the hash chain must cover the logical record, not the SQLite row layout | P2 |
 
 ## Resolved
@@ -25,3 +24,4 @@ Each question is answered by a measurement or decision in the phase noted, then 
 | - | -------- | ------ | ----- |
 | R1 | Project name | **osreflog** | [ADR 0009](./decisions/0009-name-osreflog.md), [naming/](./naming/) |
 | R2 | Language and core libraries | Rust; aya, zbus, rusqlite (drainscope's stack) | [ADR 0001](./decisions/0001-rust-drainscope-stack.md) |
+| R3 | License | GPL-3.0-or-later, same as drainscope (decided 2026-10-14) | [LICENSE](../LICENSE) |

@@ -57,3 +57,7 @@ Fedora Workstation on btrfs (the default since Fedora 33). It needs a single btr
 ## Documentation
 
 Start at [docs/README.md](docs/README.md).
+
+## License
+
+[GPL-3.0-or-later](LICENSE)
