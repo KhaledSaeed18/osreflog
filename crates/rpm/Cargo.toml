@@ -1,0 +1,18 @@
+[package]
+name = "osreflog-rpm"
+description = "Packages inside a snapshot: rpm headers from rpmdb.sqlite, dnf5 transaction history, package diffs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+osreflog-model.workspace = true
+rusqlite.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
