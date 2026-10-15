@@ -2,6 +2,7 @@
 
 mod doctor;
 mod format;
+mod textdiff;
 mod time;
 
 use std::process::ExitCode;
@@ -9,7 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
-use osreflog_model::{Checkpoint, DiffReport, LogEntry, Status, VerifyReport};
+use osreflog_model::{
+    Cause, CauseDetail, Checkpoint, DiffReport, LogEntry, Status, VerifyReport, WhyEntry,
+};
 
 #[zbus::proxy(
     interface = "io.github.khaledsaeed18.osreflog1",
@@ -23,6 +26,9 @@ trait Osreflog {
     fn verify(&self) -> zbus::Result<String>;
     fn checkpoint(&self, note: &str) -> zbus::Result<String>;
     fn hook(&self, phase: &str, pid: u32) -> zbus::Result<String>;
+    fn causes(&self, limit: u32) -> zbus::Result<String>;
+    fn show(&self, id: i64) -> zbus::Result<String>;
+    fn why(&self, path: &str, limit: u32) -> zbus::Result<String>;
 }
 
 /// How long the dnf hook waits for the daemon before giving up (and letting dnf continue).
@@ -81,6 +87,28 @@ enum Cmd {
         json: bool,
     },
     /// Re-check the ledger's hash chain against its records.
+    /// Causes the live witness recorded, newest first: who changed what.
+    Causes {
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// One cause with every change it made (`osreflog show 12` or `show #12`).
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Why a path changed: who changed it, when, and what changed inside it.
+    Why {
+        path: std::path::PathBuf,
+        /// How many changes to show, newest first.
+        #[arg(short = 'n', long, default_value_t = 5)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
     Verify {
         #[arg(long)]
         json: bool,
@@ -179,6 +207,8 @@ async fn hook(session: bool, phase: &str, pid: u32) {
     }
 }
 
+// One arm per subcommand: long, but flat.
+#[allow(clippy::too_many_lines)]
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match cli.command {
         Cmd::Hook { phase, pid } => {
@@ -251,6 +281,40 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     }
                     if !v.ok {
                         return Ok(ExitCode::FAILURE);
+                    }
+                }
+                Cmd::Causes { limit, json } => {
+                    let raw = p.causes(limit).await.map_err(explain)?;
+                    if json {
+                        print_json(&raw)?;
+                    } else {
+                        format::causes(&serde_json::from_str::<Vec<Cause>>(&raw)?);
+                    }
+                }
+                Cmd::Show { id, json } => {
+                    let id: i64 = id
+                        .trim_start_matches('#')
+                        .parse()
+                        .context("a cause id, like 12 or #12")?;
+                    let raw = p.show(id).await.map_err(explain)?;
+                    if json {
+                        print_json(&raw)?;
+                    } else {
+                        format::show(&serde_json::from_str::<CauseDetail>(&raw)?);
+                    }
+                }
+                Cmd::Why { path, limit, json } => {
+                    let abs = if path.is_absolute() {
+                        path
+                    } else {
+                        std::env::current_dir()?.join(path)
+                    };
+                    let path = abs.to_string_lossy().into_owned();
+                    let raw = p.why(&path, limit).await.map_err(explain)?;
+                    if json {
+                        print_json(&raw)?;
+                    } else {
+                        format::why(&path, &serde_json::from_str::<Vec<WhyEntry>>(&raw)?);
                     }
                 }
                 Cmd::Hook { .. } | Cmd::Doctor => bail!("unreachable"),
