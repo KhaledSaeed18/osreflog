@@ -14,6 +14,7 @@ osreflog-fanotify.workspace = true
 osreflog-ledger.workspace = true
 osreflog-model.workspace = true
 osreflog-rpm.workspace = true
+osreflog-semantic = { path = "../../crates/semantic" }
 anyhow.workspace = true
 aya.workspace = true
 blake3.workspace = true
@@ -32,6 +33,7 @@ tracing-subscriber.workspace = true
 zbus.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
 

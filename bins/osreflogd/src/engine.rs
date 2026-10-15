@@ -169,6 +169,7 @@ fn model_change(c: osreflog_btrfs::Change) -> Change {
         bytes: c.bytes,
         cause: None,
         witness: None,
+        summary: Vec::new(),
     }
 }
 
@@ -190,6 +191,7 @@ pub struct Engine {
     pub policy: Policy,
     /// The live witness's shared state (brackets, flush progress, counters).
     pub live: Arc<LiveState>,
+    summarize_tx: Mutex<Option<std::sync::mpsc::Sender<i64>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -231,6 +233,7 @@ impl Engine {
             compute_lock: Mutex::new(()),
             policy: Policy::default(),
             live: Arc::new(LiveState::default()),
+            summarize_tx: Mutex::new(None),
         })
     }
 
@@ -553,6 +556,8 @@ impl Engine {
                     (iv, false)
                 };
                 let gaps = lock(&self.ledger).gaps_between(from.created_ms, to.created_ms)?;
+                let mut iv = iv;
+                self.fill_summaries(&mut iv.changes);
                 let from_ep = Endpoint::Checkpoint(from);
                 return Ok(report(
                     from_ep,
@@ -564,41 +569,8 @@ impl Engine {
                 ));
             }
             Resolved::Live => {
-                if from.pruned_ms.is_some() {
-                    return Err(EngineError::Invalid(format!(
-                        "the snapshot of {} was pruned",
-                        from.name
-                    )));
-                }
-                let _compute = lock(&self.compute_lock);
-                let taken = now_ms();
-                let name = format!("live-{taken}");
-                {
-                    let _snap = lock(&self.snap_lock);
-                    ioctl::create_snapshot(
-                        self.layout.root_fd(),
-                        self.layout.tmp_fd(),
-                        &name,
-                        true,
-                    )
-                    .map_err(io("snapshotting the live system"))?;
-                }
-                let root = self.layout.tmp().join(&name);
-                let result = File::open(&root)
-                    .map_err(io("opening the live snapshot"))
-                    .and_then(|f| {
-                        self.compute(
-                            &from,
-                            &Target {
-                                root: &root,
-                                fd: OwnedFd::from(f),
-                                created_ms: taken,
-                                checkpoint_id: None,
-                            },
-                        )
-                    });
-                let _ = ioctl::delete_subvolume(self.layout.tmp_fd(), &name);
-                (result?, Endpoint::Live { taken_ms: taken }, false)
+                let (iv, taken) = self.diff_to_live(&from)?;
+                (iv, Endpoint::Live { taken_ms: taken }, false)
             }
         };
         let to_ms = match &to_endpoint {
@@ -606,6 +578,8 @@ impl Engine {
             Endpoint::Checkpoint(c) => c.created_ms,
         };
         let gaps = lock(&self.ledger).gaps_between(from.created_ms, to_ms)?;
+        let mut interval = interval;
+        self.fill_summaries(&mut interval.changes);
         Ok(report(
             Endpoint::Checkpoint(from),
             to_endpoint,
@@ -614,6 +588,40 @@ impl Engine {
             all,
             gaps,
         ))
+    }
+
+    /// The interval from checkpoint `from` to the live system, through a temporary snapshot.
+    fn diff_to_live(&self, from: &Checkpoint) -> Result<(Interval, i64)> {
+        if from.pruned_ms.is_some() {
+            return Err(EngineError::Invalid(format!(
+                "the snapshot of {} was pruned",
+                from.name
+            )));
+        }
+        let _compute = lock(&self.compute_lock);
+        let taken = now_ms();
+        let name = format!("live-{taken}");
+        {
+            let _snap = lock(&self.snap_lock);
+            ioctl::create_snapshot(self.layout.root_fd(), self.layout.tmp_fd(), &name, true)
+                .map_err(io("snapshotting the live system"))?;
+        }
+        let root = self.layout.tmp().join(&name);
+        let result = File::open(&root)
+            .map_err(io("opening the live snapshot"))
+            .and_then(|f| {
+                self.compute(
+                    from,
+                    &Target {
+                        root: &root,
+                        fd: OwnedFd::from(f),
+                        created_ms: taken,
+                        checkpoint_id: None,
+                    },
+                )
+            });
+        let _ = ioctl::delete_subvolume(self.layout.tmp_fd(), &name);
+        Ok((result?, taken))
     }
 
     /// The newest `limit` checkpoints with their interval summaries, newest first.
@@ -662,6 +670,22 @@ impl Engine {
     /// On ledger errors.
     pub fn verify(&self) -> Result<VerifyReport> {
         Ok(lock(&self.ledger).verify()?)
+    }
+
+    /// Attaches stored semantic summaries to changes that have a cause (best effort: the
+    /// summarizer runs after a cause is stored).
+    fn fill_summaries(&self, changes: &mut [Change]) {
+        let l = lock(&self.ledger);
+        let mut by_cause: HashMap<i64, HashMap<String, Vec<String>>> = HashMap::new();
+        for c in changes.iter_mut() {
+            let Some(cause) = &c.cause else { continue };
+            let map = by_cause
+                .entry(cause.id)
+                .or_insert_with(|| l.summaries(cause.id).unwrap_or_default());
+            if let Some(lines) = map.get(&c.path) {
+                c.summary.clone_from(lines);
+            }
+        }
     }
 
     /// Where the live witness keeps file contents (inside the ledger subvolume).
@@ -760,7 +784,11 @@ impl Engine {
     /// # Errors
     /// On ledger errors.
     pub fn store_cause(&self, cause: &Cause, changes: &[LiveChange]) -> Result<i64> {
-        Ok(lock(&self.ledger).store_cause(cause, changes)?)
+        let id = lock(&self.ledger).store_cause(cause, changes)?;
+        if let Some(tx) = lock(&self.summarize_tx).as_ref() {
+            let _ = tx.send(id);
+        }
+        Ok(id)
     }
 
     /// Records a window the live witness may have missed.
@@ -827,10 +855,12 @@ impl Engine {
         let cause = l
             .cause(id)?
             .ok_or_else(|| EngineError::Invalid(format!("no cause #{id}")))?;
-        Ok(CauseDetail {
-            changes: l.cause_changes(id)?,
-            cause,
-        })
+        let mut summaries = l.summaries(id)?;
+        let mut changes = l.cause_changes(id)?;
+        for c in &mut changes {
+            c.summary = summaries.remove(&c.path).unwrap_or_default();
+        }
+        Ok(CauseDetail { changes, cause })
     }
 
     /// Why `path` changed: its newest live changes with their causes and, where known, the
@@ -840,45 +870,19 @@ impl Engine {
     /// On ledger errors.
     pub fn why(&self, path: &str, limit: usize) -> Result<Vec<WhyEntry>> {
         let blobs = Blobs::new(&self.blob_dir()).map_err(io("opening the blob store"))?;
-        let (history, checkpoints) = {
-            let l = lock(&self.ledger);
-            (l.history(path, limit)?, l.checkpoints()?)
-        };
-        let text = |hash: &Option<String>| {
-            hash.as_deref()
-                .and_then(|h| blobs.read(h))
-                .and_then(|b| String::from_utf8(b).ok())
-        };
+        let history = lock(&self.ledger).history(path, limit)?;
         let mut out = Vec::new();
-        for (cause, change) in history {
+        for (cause, mut change) in history {
             let after = if change.op == "delete" {
                 None
             } else {
-                text(&change.blob)
+                blob_text(&blobs, change.blob.as_deref())
             };
-            // A created path has no "before", even if an earlier file of that name existed and
-            // was deleted (its content belongs to that earlier file's history).
-            let previous = if change.op == "create" {
-                None
-            } else {
-                lock(&self.ledger).previous_blob(&change.path, change.ts_ms)?
-            };
-            let before = match previous {
-                None if change.op == "create" => None,
-                Some(h) => text(&Some(h)),
-                None => checkpoints
-                    .iter()
-                    .rev()
-                    .find(|c| c.pruned_ms.is_none() && c.created_ms < cause.started_ms)
-                    .and_then(|c| {
-                        let original = change.from.as_deref().unwrap_or(&change.path);
-                        let file = self
-                            .layout
-                            .snapshot_path(&c.name)
-                            .join(original.trim_start_matches('/'));
-                        read_text(&file, original)
-                    }),
-            };
+            let (before, _) = self.before_of(&blobs, &change, cause.started_ms)?;
+            change.summary = lock(&self.ledger)
+                .summaries(cause.id)?
+                .remove(&change.path)
+                .unwrap_or_default();
             out.push(WhyEntry {
                 cause,
                 change,
@@ -888,6 +892,123 @@ impl Engine {
         }
         Ok(out)
     }
+
+    /// What was at a changed path before the change: content and symlink target. The newest
+    /// earlier record of the live witness, else the file in the newest snapshot before the
+    /// cause. A created path has no "before", even if an earlier file of that name existed.
+    fn before_of(
+        &self,
+        blobs: &Blobs,
+        change: &LiveChange,
+        started_ms: i64,
+    ) -> Result<(Option<String>, Option<String>)> {
+        if change.op == "create" {
+            return Ok((None, None));
+        }
+        let original = change.from.as_deref().unwrap_or(&change.path);
+        let (blob, target, checkpoints) = {
+            let l = lock(&self.ledger);
+            (
+                l.previous_blob(original, change.ts_ms)?,
+                l.previous_target(original, change.ts_ms)?,
+                l.checkpoints()?,
+            )
+        };
+        let snapshot = checkpoints
+            .iter()
+            .rev()
+            .find(|c| c.pruned_ms.is_none() && c.created_ms < started_ms)
+            .map(|c| {
+                self.layout
+                    .snapshot_path(&c.name)
+                    .join(original.trim_start_matches('/'))
+            });
+        let content = match blob {
+            Some(h) => blob_text(blobs, Some(&h)),
+            None => snapshot.as_ref().and_then(|f| read_text(f, original)),
+        };
+        let target = target.or_else(|| {
+            snapshot
+                .as_ref()
+                .and_then(|f| std::fs::read_link(f).ok())
+                .map(|t| t.to_string_lossy().into_owned())
+        });
+        Ok((content, target))
+    }
+
+    /// Starts the thread that summarizes causes after they're stored.
+    pub fn start_summarizer(self: &Arc<Self>) {
+        let (tx, rx) = std::sync::mpsc::channel::<i64>();
+        *lock(&self.summarize_tx) = Some(tx);
+        let engine = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("summarizer".into())
+            .spawn(move || {
+                for id in rx {
+                    if let Err(e) = engine.summarize_cause(id) {
+                        tracing::warn!(cause = id, "summarizing cause #{id} failed: {e}");
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::error!("summarizer unavailable: {e}");
+        }
+    }
+
+    /// Summarizes the config changes of one stored cause in the sandboxed worker and stores
+    /// the result.
+    ///
+    /// # Errors
+    /// On ledger errors or a failed worker.
+    pub fn summarize_cause(&self, id: i64) -> Result<usize> {
+        let blobs = Blobs::new(&self.blob_dir()).map_err(io("opening the blob store"))?;
+        let (cause, changes) = {
+            let l = lock(&self.ledger);
+            let Some(cause) = l.cause(id)? else {
+                return Ok(0);
+            };
+            (cause, l.cause_changes(id)?)
+        };
+        let mut paths = Vec::new();
+        let mut items = Vec::new();
+        for c in changes
+            .iter()
+            .filter(|c| classify(&c.path) == Class::Config)
+            .take(MAX_SUMMARIZED)
+        {
+            let (before, before_target) = self.before_of(&blobs, c, cause.started_ms)?;
+            let after = if c.op == "delete" {
+                None
+            } else {
+                blob_text(&blobs, c.blob.as_deref())
+            };
+            paths.push(c.path.clone());
+            items.push(osreflog_semantic::Item {
+                path: c.path.clone(),
+                op: c.op.clone(),
+                before,
+                after,
+                before_target,
+                after_target: c.target.clone(),
+            });
+        }
+        if items.is_empty() {
+            return Ok(0);
+        }
+        let summaries = crate::summarize::run(items).map_err(io("running the summarizer"))?;
+        let rows: Vec<(String, Vec<String>)> = paths.into_iter().zip(summaries).collect();
+        lock(&self.ledger).store_summaries(id, &rows)?;
+        Ok(rows.len())
+    }
+}
+
+/// At most this many changes of one cause are summarized (a big package transaction's config
+/// files are the realistic maximum).
+const MAX_SUMMARIZED: usize = 200;
+
+fn blob_text(blobs: &Blobs, hash: Option<&str>) -> Option<String> {
+    hash.and_then(|h| blobs.read(h))
+        .and_then(|b| String::from_utf8(b).ok())
 }
 
 /// How long attribution waits for the live witness to store causes up to an interval's end.

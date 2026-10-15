@@ -160,6 +160,9 @@ pub struct Change {
     /// witness bracketed), or `state` (only the snapshot diff saw it). `None` before P3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness: Option<String>,
+    /// What the change means, from its cause's semantic summary (display only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summary: Vec<String>,
 }
 
 impl Change {
@@ -219,6 +222,12 @@ pub struct LiveChange {
     /// The process that made this change, e.g. `sed (pid 1406613)` (P3 schema v3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
+    /// For a symlink: where it points after the change (P4 schema v4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// What the change means, when summarized (filled in for display; not stored here).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summary: Vec<String>,
 }
 
 /// A time window in which the live witness may have missed changes.

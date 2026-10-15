@@ -409,6 +409,8 @@ mod tests {
             blob: None,
             size: None,
             actor: None,
+            target: None,
+            summary: Vec::new(),
         }
     }
 

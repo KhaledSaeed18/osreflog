@@ -208,6 +208,9 @@ pub fn diff(r: &DiffReport, stat_only: bool) {
         println!("\nfiles ({}):", r.changes.len());
         for c in &r.changes {
             println!("{}", change_line(c));
+            for line in &c.summary {
+                println!("      · {line}");
+            }
         }
     }
     if r.hidden > 0 {
@@ -309,6 +312,9 @@ pub fn show(d: &CauseDetail) {
     }
     for ch in &d.changes {
         println!("{}", live_line(ch));
+        for line in &ch.summary {
+            println!("        · {line}");
+        }
     }
 }
 
@@ -329,6 +335,9 @@ pub fn why(path: &str, entries: &[WhyEntry]) {
         match &e.change.actor {
             Some(actor) => println!("  process {actor}"),
             None => println!("  actor {}", actor_line(&e.cause.actor)),
+        }
+        for line in &e.change.summary {
+            println!("  · {line}");
         }
         match (&e.before, &e.after) {
             (Some(before), Some(after)) => {

@@ -298,6 +298,17 @@ impl Capture {
         } else {
             (None, None)
         };
+        // Symlinks: record where they point (/etc/localtime, alternatives, masks, .wants).
+        let target = if op == "delete" || is_dir {
+            None
+        } else {
+            dirfd
+                .as_ref()
+                .and_then(|fd| {
+                    rustix::fs::readlinkat(fd, OsStr::from_bytes(&name), Vec::new()).ok()
+                })
+                .map(|t| t.to_string_lossy().into_owned())
+        };
         let change = LiveChange {
             ts_ms: ts,
             path,
@@ -310,6 +321,8 @@ impl Capture {
                 .table
                 .get(pid)
                 .map(|p| format!("{} (pid {pid})", p.comm)),
+            target,
+            summary: Vec::new(),
         };
         self.builder.add(&classified, change, now);
         self.live.stats().recorded += 1;

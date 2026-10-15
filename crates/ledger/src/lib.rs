@@ -14,7 +14,7 @@ use osreflog_model::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -143,6 +143,18 @@ CREATE INDEX attribution_by_interval ON attribution (interval_id, path);
 /// v2 → v3: which process made each live change.
 const SCHEMA_V3: &str = "ALTER TABLE live_changes ADD COLUMN actor TEXT;";
 
+/// v3 → v4: symlink targets on live changes, and per-change semantic summaries (derived from
+/// blobs, so not chained: they can always be recomputed).
+const SCHEMA_V4: &str = "
+ALTER TABLE live_changes ADD COLUMN target TEXT;
+CREATE TABLE summaries (
+    cause_id INTEGER NOT NULL REFERENCES causes(id),
+    path TEXT NOT NULL,
+    lines TEXT NOT NULL,
+    PRIMARY KEY (cause_id, path)
+);
+";
+
 /// An interval as stored or about to be stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
@@ -218,6 +230,7 @@ impl IntervalRecord {
             .map(|c| Change {
                 cause: None,
                 witness: None,
+                summary: Vec::new(),
                 ..c.clone()
             })
             .collect();
@@ -341,6 +354,9 @@ impl Ledger {
         }
         if version < 3 {
             conn.execute_batch(SCHEMA_V3)?;
+        }
+        if version < 4 {
+            conn.execute_batch(SCHEMA_V4)?;
         }
         if version < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -662,6 +678,7 @@ impl Ledger {
                     bytes: u64_of(r.get(6)?),
                     cause: None,
                     witness: None,
+                    summary: Vec::new(),
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
@@ -973,7 +990,7 @@ impl Ledger {
         let id = tx.last_insert_rowid();
         {
             let mut ins = tx.prepare(
-                "INSERT INTO live_changes (cause_id, ts_ms, path, op, from_path, kind, blob, size, actor) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO live_changes (cause_id, ts_ms, path, op, from_path, kind, blob, size, actor, target) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )?;
             for c in changes {
                 ins.execute(params![
@@ -985,7 +1002,8 @@ impl Ledger {
                     c.kind,
                     c.blob,
                     c.size.map(i64_of),
-                    c.actor
+                    c.actor,
+                    c.target
                 ])?;
             }
         }
@@ -1066,6 +1084,8 @@ impl Ledger {
             blob: r.get(at + 5)?,
             size: size.map(u64_of),
             actor: r.get(at + 7)?,
+            target: r.get(at + 8)?,
+            summary: Vec::new(),
         })
     }
 
@@ -1075,7 +1095,7 @@ impl Ledger {
     /// On SQLite errors.
     pub fn cause_changes(&self, id: i64) -> Result<Vec<LiveChange>> {
         let mut stmt = self.conn.prepare(
-            "SELECT ts_ms, path, op, from_path, kind, blob, size, actor FROM live_changes WHERE cause_id = ?1 ORDER BY rowid",
+            "SELECT ts_ms, path, op, from_path, kind, blob, size, actor, target FROM live_changes WHERE cause_id = ?1 ORDER BY rowid",
         )?;
         let rows = stmt.query_map([id], |r| Self::row_to_live(r, 0))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -1087,7 +1107,7 @@ impl Ledger {
     /// On SQLite errors.
     pub fn live_changes_between(&self, from_ms: i64, to_ms: i64) -> Result<Vec<(i64, LiveChange)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size, actor FROM live_changes
+            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size, actor, target FROM live_changes
              WHERE ts_ms BETWEEN ?1 AND ?2 ORDER BY ts_ms, rowid",
         )?;
         let rows = stmt.query_map([from_ms, to_ms], |r| {
@@ -1116,7 +1136,7 @@ impl Ledger {
     /// On SQLite errors.
     pub fn history(&self, path: &str, limit: usize) -> Result<Vec<(Cause, LiveChange)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size, actor FROM live_changes
+            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size, actor, target FROM live_changes
              WHERE path = ?1 OR from_path = ?1 ORDER BY ts_ms DESC, rowid DESC LIMIT ?2",
         )?;
         let rows: Vec<(i64, LiveChange)> = stmt
@@ -1147,6 +1167,63 @@ impl Ledger {
                 |r| r.get(0),
             )
             .optional()?)
+    }
+
+    /// The newest symlink target recorded for `path` before `ts_ms`.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn previous_target(&self, path: &str, ts_ms: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT target FROM live_changes WHERE path = ?1 AND ts_ms < ?2 AND target IS NOT NULL ORDER BY ts_ms DESC, rowid DESC LIMIT 1",
+                params![path, ts_ms],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Stores the semantic summaries of a cause's changes, by path.
+    ///
+    /// # Errors
+    /// On SQLite or encoding errors.
+    pub fn store_summaries(
+        &self,
+        cause_id: i64,
+        summaries: &[(String, Vec<String>)],
+    ) -> Result<()> {
+        let mut ins = self.conn.prepare(
+            "INSERT OR REPLACE INTO summaries (cause_id, path, lines) VALUES (?1, ?2, ?3)",
+        )?;
+        for (path, lines) in summaries {
+            if !lines.is_empty() {
+                ins.execute(params![cause_id, path, serde_json::to_string(lines)?])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A cause's summaries by path.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn summaries(
+        &self,
+        cause_id: i64,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, lines FROM summaries WHERE cause_id = ?1")?;
+        let rows = stmt.query_map([cause_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (path, lines) = row?;
+            out.insert(path, serde_json::from_str(&lines).unwrap_or_default());
+        }
+        Ok(out)
     }
 
     /// Records a window in which the live witness may have missed changes.
@@ -1319,6 +1396,7 @@ mod tests {
                     bytes: 4096,
                     cause: None,
                     witness: None,
+                    summary: Vec::new(),
                 },
                 Change {
                     path: "/var/log/dnf5.log".into(),
@@ -1330,6 +1408,7 @@ mod tests {
                     bytes: 0,
                     cause: None,
                     witness: None,
+                    summary: Vec::new(),
                 },
             ],
             packages: vec![PackageChange {
@@ -1446,6 +1525,8 @@ mod tests {
             blob: blob.map(Into::into),
             size: Some(3),
             actor: None,
+            target: None,
+            summary: Vec::new(),
         }
     }
 

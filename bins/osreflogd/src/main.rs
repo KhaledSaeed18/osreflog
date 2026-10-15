@@ -39,6 +39,19 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    // The sandboxed summarizer: this same executable, before anything else runs.
+    if std::env::args().nth(1).as_deref() == Some(osreflogd::summarize::WORKER_FLAG) {
+        std::process::exit(osreflogd::summarize::worker_main());
+    }
+    // Test hook: enter the sandbox, then try to read a file. The sandbox must kill us first.
+    if std::env::args().nth(1).as_deref() == Some("--sandbox-selftest") {
+        if let Err(e) = osreflogd::sandbox::enter() {
+            eprintln!("sandbox unavailable: {e}");
+            std::process::exit(2);
+        }
+        let escaped = std::fs::read("/etc/hostname").is_ok();
+        std::process::exit(i32::from(!escaped));
+    }
     let args = Args::parse();
     init_logging();
     anyhow::ensure!(
@@ -49,6 +62,7 @@ fn main() -> anyhow::Result<()> {
     let layout = Layout::open(&args.root, &args.top).context("setting up the osreflog layout")?;
     let ledger = Ledger::open(&layout.ledger_path()).context("opening the ledger")?;
     let engine = Arc::new(Engine::new(layout, ledger).context("starting the engine")?);
+    engine.start_summarizer();
     if let Some(c) = engine
         .boot_checkpoint_if_needed()
         .context("taking the boot checkpoint")?
