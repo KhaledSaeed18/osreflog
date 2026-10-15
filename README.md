@@ -2,7 +2,7 @@
 
 **A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.**
 
-> **Status: P3 done, P4 next.** The live witness runs on a real Fedora 44 machine: every change to `/etc` and friends gets a cause (the command, service, package transaction or app that made it), and `osreflog why <path>` shows who changed a file and what changed inside it. Bisect and undo come later. See the [roadmap](docs/roadmap.md).
+> **Status: P4 done; undo (P5) is next, behind the write gate.** osreflog runs on a real Fedora 44 machine. Every change to `/etc` and friends gets a cause: the command, service, package transaction or app that made it, including tools that ask a daemon over D-Bus (`timedatectl`, `firewall-cmd`, `systemctl enable`…). `osreflog why <path>` shows who changed a file and what it means (`user osreflogwl added`, `time zone: UTC → Asia/Beirut`, `enabled foo.service`), computed in a sandboxed worker. `osreflog user` does the same for your own GNOME settings. Bisect and undo come later. See the [roadmap](docs/roadmap.md).
 
 "It worked last week." Your Wi-Fi drops, suspend stops working, or an app won't start, and something changed in between. A package update, a config edit, a GNOME setting, a firmware update, a command you ran at 2 a.m. Linux can take snapshots of your system (Snapper, Timeshift), but none of them can tell you *what* changed between two snapshots, *what caused* each change, or *which one* broke things.
 

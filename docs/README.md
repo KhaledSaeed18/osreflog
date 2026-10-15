@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P4 (semantic diffs, D-Bus caller attribution) next; P3 closed 2026-10-15 ([journal](./journal/p3-live.md)): 87/87 config changes explained across ~22 real admin tools. Last updated 2026-10-15.
+**Status:** the WRITE GATE and P5 (undo) next; P4 closed 2026-10-15 ([journal](./journal/p4-semantics.md)): D-Bus callers credited, semantic summaries in a sandboxed worker, every parser fuzzed 1 h with 0 findings, and the user scope (dconf). Last updated 2026-10-15.
 
 ## Reading order
 

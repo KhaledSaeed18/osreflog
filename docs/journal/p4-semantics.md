@@ -1,9 +1,10 @@
 # P4: Callers, semantics and the user scope
 
-- Status: **in progress**
+- Status: **closed**
 - Started: 2026-10-15
+- Closed: 2026-10-15
 - Roadmap: [P4](../roadmap.md#p4-semantic-diffs-and-user-scope-next)
-- Exit: every differ fuzzed for at least 1 h with no crashes; readable semantic summaries for the testbed and workload scenarios; D-Bus-delegated writes credited to the tool that asked.
+- Exit: every differ fuzzed for at least 1 h with no crashes; readable semantic summaries for the testbed and workload scenarios; D-Bus-delegated writes credited to the tool that asked. **Met:** 8 targets × 1 h, ~3.05 billion inputs, 0 findings; workload 16/16 checks (six on summaries), user workload 8/8; all six delegating tools credited to the caller.
 
 ## Plan
 
@@ -92,3 +93,58 @@ Workload after the fixes: **16/16 checks**, including six summary checks.
 Every cause also records `via dconf-service (ca.desrt.dconf.Writer.Change)`.
 
 **Also from this run:** the system workload's one unexplained non-noise change was `/var/lib/docker/image/identity-cache.db`. dockerd keeps it open and writes it in place, and the live witness listens for close-after-write (by design: per-write events would flood). The state witness saw it, as it should. Container engines' stores (`/var/lib/docker/`, `/var/lib/containers/`) are now noise, like the package databases.
+
+### 2026-10-15: P4c, fuzzing every parser and differ, done
+
+`fuzz/` is a stable-toolchain harness (`osreflog-fuzz`), not cargo-fuzz. cargo-fuzz needs nightly and libFuzzer, which is too much to download on this connection. There is no coverage feedback, so it mutates realistic seeds instead:
+
+- 1,525 readable files under `/etc` for the summarizers and 500 for the line diff;
+- the P1 send streams, with every command's CRC fixed after mutation half the time, so the checking parser gets past the CRC;
+- rpm headers and fanotify events built by the crates' own builders.
+
+The mutations are bit flips, interesting bytes and integers, syntax tokens, insertions, deletions, duplicated ranges, splices between seeds, truncation and line swaps. Every target checks properties, not only panics:
+
+| Target | What it runs | Properties |
+| ------ | ------------ | ---------- |
+| `semantic` | `summarize` on random items: real and mutated content, every format's trigger path, odd symlink targets | ≤ 12 lines of ≤ 200 chars, no control characters, deterministic |
+| `stream` | the send-stream parser and change-set builder, with and without CRC checks | command count bounded by input size; the CRC-checked and unchecked parses agree |
+| `rpm-header` | the rpmdb header parser | no panic |
+| `rpm-diff` | the package-set diff on random package lists | every package that left or arrived is accounted for exactly once |
+| `vercmp` | `rpmvercmp` on generated and mutated versions | reflexive, antisymmetric, transitive |
+| `fanotify` | the event-buffer parser | a parsed event rebuilds and re-parses to itself |
+| `refs` | checkpoint references (the D-Bus service parses them for any local caller) | no panic |
+| `textdiff` | the CLI's line diff | the edit script rebuilds both sides; empty diff iff equal |
+
+Every input is also timed: more than 500 ms of **thread CPU time**, confirmed by a second run, is a finding. The first run timed by wall clock and reported 75 "slow" inputs while the machine was building. None reproduced (7–38 ms on replay), so they measured the scheduler, not the parser. The harness also caps its own address space at 2 GiB and writes large inputs to disk before running them, so an abort leaves its input behind; runs are deterministic for the logged seed.
+
+`rpmvercmp` is also tested **differentially**: `osreflog-fuzz vercmp-pairs` generates version pairs from tricky pieces (`~`, `^`, leading zeros, letters, separators, huge numbers), and `scripts/p4/vercmp_vs_rpm.py` compares each result with `rpm.labelCompare` from rpm 6.0.2.
+
+**Results** (`scripts/p4/fuzz.sh 3600`, all targets in parallel at `nice 19`):
+
+| Target | Inputs in 1 h | Slowest (CPU) | Largest input | Findings |
+| ------ | ------------: | ------------: | ------------: | -------: |
+| `semantic` | 12,891,704 | 44 ms | 188,921 B | 0 |
+| `stream` | 4,054,877 | 11 ms | 43,249 B | 0 |
+| `rpm-header` | 749,742,254 | < 1 ms | 1,207 B | 0 |
+| `rpm-diff` | 58,991,495 | < 1 ms | 1,019 B | 0 |
+| `vercmp` | 663,523,695 | < 1 ms | 748 B | 0 |
+| `fanotify` | 764,611,472 | < 1 ms | 1,365 B | 0 |
+| `refs` | 791,960,147 | < 1 ms | 743 B | 0 |
+| `textdiff` | 6,019,305 | 124 ms | 121,375 B | 0 |
+
+Differential `vercmp`: **200,000 pairs, 0 mismatches** with rpm.
+
+**Found by reading, not by fuzzing.** While writing the `textdiff` target, I noticed the CLI's Myers diff kept a full copy of its V array per edit step: O(D·(n+m)) memory, gigabytes for two very different 1 MiB files. The fuzzer's inputs are too small to hit that. It now trims common prefix and suffix first, keeps only the diagonals each step reads (O(D²)), and stops at 1,000 edits, showing the middle as replaced. That is still a correct edit script, and a test pins it on two 20,000-line files. Computing hunk line numbers also went from quadratic to one pass.
+
+## What changed in the design
+
+- [ADR 0010](../decisions/0010-user-scope-own-ledger.md): the user scope keeps its own ledger instead of reporting to the daemon.
+- [threat-model.md](../threat-model.md): the summarize worker as built (rlimits instead of a cgroup), the fuzzing as built (a stable harness instead of cargo-fuzz), positional-key argv redaction, and a user-scope section.
+- [architecture.md](../architecture.md): `osreflog-parse` became `osreflogd --summarize-worker`; `osreflog-user` covers dconf.
+- Noise: container engine stores join the noise classes.
+
+## Not done in P4, and where it went
+
+- **`~/.config` inode marks** (user-scope files): dconf is where GNOME settings actually live, and a per-user fanotify mark needs privileges the agent doesn't have. Moved to P8, alongside the GNOME app.
+- **Differs for BLS entries, TOML/YAML, SELinux booleans, systemd effective config** (drop-ins merged): P5's undo of boot config needs the BLS one, so it comes with P5. TOML/YAML fall back to the line diff today. The rest go to P8.
+- **The P3 testbed** was not rerun as such; its scenarios (`sed -i`, editor save, `systemctl enable`, a unit write, dnf, a secret file) are all in the workload, which passed 16/16.
