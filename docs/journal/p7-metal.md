@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate in progress** (G1 done)
+- Status: **boot gate in progress** (G1, G2 done)
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -75,3 +75,24 @@ The owner took both proposals:
 The first `check` lost its report: the console prefixes each line (`[ 13.37] osreflog-testvm-check[1097]: TESTVM …`), the script matched at `^`, `pipefail` ended it silently, and qemu was left running. The check now matches anywhere, kills qemu on any exit and prints the serial log's tail on a failure. GRUB also logged `no such device: F034-AABF`: the host's grub.cfg names the ESP's UUID as well; the next build replaces it too.
 
 The menu staying visible matters for G5: a "hung probe" is simulated by stopping there and resetting.
+
+### 2026-10-15: G2, the probe's boot entry
+
+`crates/boot` (17 tests, a stand-in `/boot` written with the real `grub2-editenv`):
+- **Default record**: `saved_entry`, BLAKE3 of its entry file, its kernel and initramfs paths. Checked before writing the probe entry, before and after arming, and after every boot. Refused up front: no `saved_entry` (the default would be "the first entry", which a probe entry could become), a `prev_saved_entry`, `saved_entry` naming the probe, an id with `/`, and a `/boot` inside the root filesystem.
+- **Probe entry** `osreflog-probe.conf`: the default's entry with the probe's title, kernel and initramfs, `rootflags=subvol=osreflog/probes/pN` (other mount options kept, `subvolid=` dropped), `osreflog.probe=N` and `panic=10`; `$kernelopts`-style variables expanded from grubenv. Written as `.osreflog-probe.conf.tmp` (which `blscfg` ignores), synced, renamed.
+- **Arming** is `grub2-editenv … set next_entry=osreflog-probe`, read back. Not `grub2-reboot`: it also copies a leftover `prev_saved_entry` into `saved_entry`, which changes the default, and runs `grub2-probe` on the disk. Disarming clears `next_entry` only when it names the probe.
+- **Kernel**: the probe's newest kernel; `/boot`'s copy reused when the image is identical and an initramfs exists, otherwise copied to `/boot/osreflog/` with a host-only initramfs built by `dracut --sysroot <probe>`, so the probe boots with its own module options.
+
+`scripts/p7/testvm.sh flow` installs a step script that runs after the report at every boot (state in `/home`, which default and probe share). `scripts/p7/g2-step.sh`, three boots:
+
+| Boot | What it showed |
+| ---- | -------------- |
+| 1, default | default recorded; `/` snapshotted as `osreflog/probes/p1`; kernel copied and initramfs built from the probe in **22 s** (41 MiB + 18 MiB in `/boot/osreflog`); entry written; armed: `next_entry=osreflog-probe`, `saved_entry` unchanged, default verified |
+| 2, probe | GRUB booted `/osreflog/vmlinuz-…` **under Secure Boot** (a copied Fedora-signed image passes shim); `/` = `vda3[/osreflog/probes/p1]`, the marker written into the probe is there; GRUB had already cleared `next_entry` (left as `next_entry=`, empty); default verified from inside the probe; boot 14.3 s |
+| 3, default | the default again without anything being done; default verified, disarmed, probe deleted, nothing left on `/boot`, default verified once more |
+
+Findings:
+- **The probe's fstab says `subvol=root` and nothing failed.** `systemd-remount-fs` remounted `/` with the options of the subvolume actually mounted (`subvol=/osreflog/probes/p1`). The fstab rewrite in G3 is still needed for the ledger and for honesty, but a stale `/` line doesn't break the boot.
+- **osreflogd failed to start in the probe** (the only failed unit), as predicted: the probe has the daemon enabled. G3 masks it in the clone.
+- The host side reported FAIL although the VM printed DONE: the report was kept in `$LINES`, which bash (checkwinsize) resets to the terminal's height after an external command. Renamed; the VM-side results above are from the serial log.

@@ -240,7 +240,8 @@ qemu() {
 }
 
 # Boots the image headless until the serial log has a line matching $1 (or qemu exits, or
-# TESTVM_TIMEOUT passes), prints the TESTVM lines, and powers the VM off. Sets LINES.
+# TESTVM_TIMEOUT passes), prints the TESTVM lines, and powers the VM off. Sets REPORT (not
+# LINES: bash resets that to the terminal height after external commands).
 boot_until() {
     ready
     rm -f "$LOG" "$MON"
@@ -257,8 +258,8 @@ boot_until() {
     done
     echo "reported after $((SECONDS - t0)) s; qemu RSS $(awk '/VmHWM/ {print int($2/1024) " MiB peak"}' "/proc/$pid/status")"
     # Console control sequences can come before a line's text: match anywhere, not at ^.
-    LINES=$(tr -d '\r' <"$LOG" | grep -ao 'TESTVM.*' || true)
-    sed 's/^TESTVM /  /' <<<"$LINES"
+    REPORT=$(tr -d '\r' <"$LOG" | grep -ao 'TESTVM.*' || true)
+    sed 's/^TESTVM /  /' <<<"$REPORT"
     python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"system_powerdown\n")' "$MON"
     for _ in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     if kill -0 "$pid" 2>/dev/null; then echo "  (no clean poweroff in 60 s: stopped)"; kill "$pid"; fi
@@ -269,7 +270,7 @@ check() {
     boot_until TESTVM-READY
     local fails=0 entry
     entry=$(cut -d' ' -f3 "$AREA/source")
-    report() { if grep -qE "^TESTVM $2" <<<"$LINES"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
+    report() { if grep -qE "^TESTVM $2" <<<"$REPORT"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
     report "Secure Boot on in the VM" "secureboot SecureBoot enabled"
     report "/ is the image's root subvolume" "mount / .*subvol=/root"
     report "/boot is ext4" "mount /boot [^ ]+ ext4 "
@@ -308,7 +309,7 @@ flow() {
     losetup -d "$loop"
     trap - EXIT
     TESTVM_TIMEOUT=${TESTVM_TIMEOUT:-1200} boot_until 'TESTVM (DONE|FAIL)'
-    grep -q '^TESTVM DONE' <<<"$LINES" || { echo "FAIL $(basename "$step")"; exit 1; }
+    grep -q '^TESTVM DONE' <<<"$REPORT" || { echo "FAIL $(basename "$step")"; exit 1; }
     echo "ok   $(basename "$step")"
 }
 
