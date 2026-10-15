@@ -32,7 +32,7 @@
 
 ## The write gate, amended
 
-The roadmap asks for the undo matrix to pass **in a VM**. That needs a Fedora image (~500 MB at ~100 KiB/s) and a VM in 7 GB of RAM. P6 builds that anyway, and the matrix will run there again. For the gate, [ADR 0011](../decisions/0011-gate-in-a-contained-scratch-root.md) replaces the VM with a **contained scratch root**:
+The roadmap asks for the undo matrix to pass **in a VM**. osreflog's VM path boots a snapshot's own kernel over virtiofs (no image to download), but that runner is P6 work. The matrix will run there again. For the gate, [ADR 0011](../decisions/0011-gate-in-a-contained-scratch-root.md) replaces the VM with a **contained scratch root**:
 
 - a writable btrfs snapshot of the live root, so real files, real SELinux labels, real ownership;
 - the test runs as root under `systemd-run` with `ProtectSystem=strict`, `ProtectHome=read-only` and only the scratch root writable, so a resolution bug that escaped the root dirfd would hit a read-only filesystem, not the machine.
