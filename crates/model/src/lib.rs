@@ -332,6 +332,24 @@ pub struct IntervalSummary {
     pub transactions: Vec<Transaction>,
 }
 
+/// The live witness's counters since the daemon started.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveStatus {
+    pub running: bool,
+    /// fanotify events read.
+    pub events: u64,
+    /// Changes recorded into causes.
+    pub recorded: u64,
+    /// Events on other subvolumes or noise paths, dropped early.
+    pub out_of_scope: u64,
+    /// Events whose directory could no longer be resolved.
+    pub unresolved: u64,
+    pub overflows: u64,
+    pub ring_drops: u64,
+    pub open_causes: u64,
+    pub processes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
     pub version: String,
@@ -345,6 +363,9 @@ pub struct Status {
     pub chain_entries: u64,
     /// Intervals still waiting for their diff.
     pub pending_diffs: u64,
+    /// The live witness, when it's running (P3).
+    #[serde(default)]
+    pub live: Option<LiveStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
