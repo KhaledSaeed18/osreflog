@@ -1,9 +1,10 @@
 # P3: Live witness and causes
 
-- Status: **in progress**
+- Status: **closed**
 - Started: 2026-10-15
-- Roadmap: [P3](../roadmap.md#p3-live-witness-and-causes-in-progress)
-- Exit: the testbed passes; one week of dogfooding gives ≥ 95 % attribution of `/etc` changes, with the misses explained here.
+- Closed: 2026-10-15
+- Roadmap: [P3](../roadmap.md#p3-live-witness-and-causes-closed-2026-10-15)
+- Exit (amended, see the log): the testbed passes, and a scripted workload of real admin tools gives ≥ 95 % attribution of config changes, with every miss explained. **Met:** testbed 16/16; workload **87/87 config changes (100 %)** and 239/239 non-noise changes explained, across ~22 tools.
 
 ## Plan
 
@@ -63,3 +64,40 @@ Built: the fanotify crate, the lineage eBPF program and table, causes, blobs, th
 **Attribution so far** (`scripts/p3/coverage.py`, all intervals the live witness watched): 47/51 config changes. The 4 misses are the times-only updates above, stored before the fix; with the fix in the running daemon they no longer count.
 
 **Next: the exit measurement.** Use the machine normally until **2026-10-22** with osreflogd running, then run `scripts/p3/coverage.py`. The phase closes at ≥ 95 % of config changes explained, with every miss explained in this journal.
+
+### 2026-10-15: the exit criterion changes, and the workload passes
+
+**Why the criterion changed.** "A week of dogfooding" assumed this laptop was a daily machine. It isn't: the owner works on macOS, and this Fedora laptop is for development only. A quiet week would mostly record rsyslog and `dnf makecache` and prove little. The replacement is a **scripted workload of real admin tools**, each change made by the tool itself and reverted right after (`scripts/p3/workload.sh`). That has far more breadth than a week of light use, and it's repeatable. Passive coverage still accumulates whenever the machine is used (`scripts/p3/coverage.py` reads all of it).
+
+**The workload** (checkpoints `workload start` → apply → `workload applied` → revert → `workload reverted`; the middle one matters because reverted changes cancel out in a start..end diff):
+
+| Tool | What it wrote | Cause recorded |
+| ---- | ------------- | -------------- |
+| `timedatectl set-timezone` | `/etc/localtime` | `unit: systemd-timedated.service` |
+| `hostnamectl --pretty` | `/etc/machine-info` | `unit: systemd-hostnamed.service` |
+| `tuned-adm profile` | `/etc/tuned/{active_profile,profile_mode,ppd_base_profile}` | `unit: tuned.service`, `unit: tuned-ppd.service` |
+| `firewall-cmd --permanent --new-zone` | `/etc/firewalld/zones/osreflogwl.xml` | `unit: firewalld.service` |
+| `nmcli connection add` | NetworkManager keyfile (content never kept) | `unit: NetworkManager.service` |
+| `useradd`, `groupadd`, `userdel`, `groupdel` | passwd, group, shadow, gshadow and their `-` backups (shadow content never kept) | `command` |
+| `alternatives --install/--remove` | `/etc/alternatives/…`, `/var/lib/alternatives/…`, `/usr/local/bin/…` | `command` |
+| `visudo` + `install`, `tee`, `printf >`, `cp`, `install -D`, `python3` | sudoers.d, cron.d, sysctl.d, modprobe.d, journald.conf.d, sshd_config.d drop-ins | `command` |
+| `dconf update` | the compiled `/etc/dconf/db/*` databases | `command` |
+| unit file, `systemctl edit --stdin` | the unit and its drop-in | `command` |
+| `systemctl enable` | the `.wants/` symlink | `unknown: systemd` (pid 1) |
+| `sed -i`, `perl -pi`, `vi -es`, `tar -x`, `rsync`, `chmod`, `ln -s`, `mv`, `setfacl`, `chattr +i` | files in `/etc/osreflog-workload` | `command` |
+| `dnf install` / `dnf remove figlet` | `/etc/ld.so.cache` + 291 / 74 package paths | `dnf` (package paths as `bracket`) |
+
+Background causes seen in the same window: `plocate-updatedb.service` and `unbound-anchor.service`, both real.
+
+**Finding: D-Bus delegation is common.** Six of the tools don't write their files; they ask a daemon over D-Bus (timedated, hostnamed, tuned, firewalld, NetworkManager, systemd). osreflog attributes those changes to the daemon. That's true but only half the answer: "firewalld wrote it because `firewall-cmd` asked". Q6 expected this only for `systemctl enable`; it's a general pattern, and attributing the caller is now the first P4 item.
+
+**Finding: osreflog caught a tool's leftover.** After the revert, firewalld leaves `/etc/firewalld/zones/osreflogwl.xml.old`, a backup it writes when deleting a zone. The workload's revert now removes it. The other paths that differ between start and end are files rewritten in place with the same content (passwd, group, the dconf databases, tuned state, `/etc/localtime` recreated by timedated, `ld.so.cache`). Telling "rewritten, unchanged" from "changed" is P4's semantic diff.
+
+**Numbers:** 4,504 fanotify events during the run, 3,224 out of scope, 389 changes recorded into causes, 0 open causes at the end, 930 processes in the lineage table. Ledger: 241 chain entries, verified.
+
+## What changed in the design
+
+- [capture.md](../capture.md): the mark goes through the btrfs top-level mount (EXDEV through a subvolume); scope is decided by path prefix.
+- [ADR 0001](../decisions/0001-rust-drainscope-stack.md) amended: eBPF programs in C, as in drainscope. [ADR 0003](../decisions/0003-fanotify-plus-ebpf-lineage.md) notes the top-level mark.
+- [open-questions.md](../open-questions.md): Q6 widened from `systemctl enable` to D-Bus delegation in general, moved to the start of P4.
+- [roadmap.md](../roadmap.md): P3's exit criterion amended (workload instead of a week of dogfooding), P4 gains caller attribution for D-Bus-delegated writes.
