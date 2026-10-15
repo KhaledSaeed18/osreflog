@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// The daemon's D-Bus names and polkit actions.
 pub mod redact;
+pub mod secrets;
 
 pub mod bus {
     pub const NAME: &str = "io.github.khaledsaeed18.osreflog1";
