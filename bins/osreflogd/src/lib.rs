@@ -8,6 +8,7 @@ pub mod delegation;
 pub mod engine;
 pub mod layout;
 pub mod lineage;
+pub mod probe;
 #[allow(unsafe_code)]
 pub mod sandbox;
 pub mod service;

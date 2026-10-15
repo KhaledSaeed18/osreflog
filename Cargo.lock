@@ -748,6 +748,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "libc",
+ "osreflog-bisect",
  "osreflog-btrfs",
  "osreflog-fanotify",
  "osreflog-ledger",

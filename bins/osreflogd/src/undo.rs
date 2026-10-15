@@ -32,7 +32,7 @@ fn invalid(msg: impl Into<String>) -> EngineError {
 }
 
 /// Owner, permission bits and extended attributes of a file or directory (not a symlink).
-fn meta_of(path: &Path) -> Option<Meta> {
+pub(crate) fn meta_of(path: &Path) -> Option<Meta> {
     let m = std::fs::symlink_metadata(path).ok()?;
     if m.file_type().is_symlink() {
         return None;
