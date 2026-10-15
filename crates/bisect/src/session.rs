@@ -43,6 +43,9 @@ pub struct ProbeRecord {
     pub approximate: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// The end of the test's output in this probe.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub output: String,
 }
 
 /// A cause, as a result names it.

@@ -111,6 +111,7 @@ impl Session<'_> {
             peak_rss_kib: result.peak_rss_kib,
             approximate,
             detail: result.detail.clone(),
+            output: result.output.clone(),
         };
         let mut line = format!("  {} → {verdict:?} in {}", rec.what, secs(rec.ms));
         if let Some(kib) = rec.peak_rss_kib {

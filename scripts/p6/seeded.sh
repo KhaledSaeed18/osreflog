@@ -21,7 +21,7 @@ cause_of() { osreflog why "$1" -n 1 --json | python3 -I -c 'import json,sys; e=j
 
 cleanup() {
     systemctl unmask "$UNIT" >/dev/null 2>&1
-    rm -f "/etc/systemd/system/$UNIT" /etc/sysctl.d/90-osreflog-seed.conf /etc/modprobe.d/osreflog-seed.conf
+    rm -f "/etc/systemd/system/$UNIT" "/usr/local/lib/systemd/system/$UNIT" /etc/sysctl.d/90-osreflog-seed.conf /etc/modprobe.d/osreflog-seed.conf
     systemctl daemon-reload
     rm -rf "$DIR"
     rpm -q figlet >/dev/null 2>&1 && dnf remove -y -q figlet >/dev/null 2>&1
@@ -56,6 +56,12 @@ rss = max((p.get("peak_rss_kib", 0) for p in probes), default=0) // 1024
 found = f.get("culprit", {}).get("id")
 ok = f.get("found") == "cause" and found == expected
 print(f"  {'ok  ' if ok else 'FAIL'} {name}: found #{found} (expected #{expected})")
+if not ok:
+    for p in probes:
+        if p.get("output"):
+            print(f"    output of {p['what']}:")
+            for l in p["output"].splitlines():
+                print("      " + l)
 fits = len(cause_probes) <= bound
 print(f"  {'ok  ' if fits else 'FAIL'} {name}: {len(cause_probes)} cause probes for {n_causes} causes (bound ⌈log₂ n⌉+1 = {bound}), "
       f"{len(cp_probes)} checkpoint probes for {n_cps} checkpoints, 1 bad-end check")
@@ -91,11 +97,13 @@ scenario_unit() {
     echo; echo "== unit: a masked unit (nspawn; pid 1 writes the link)"
     # No systemd runs in an nspawn command probe: systemctl reads the files with --root=/.
     mkdir -p "$DIR"
-    printf '[Unit]\nDescription=osreflog seed\n[Service]\nType=oneshot\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' >"/etc/systemd/system/$UNIT"
+    # In /usr/local/lib: `systemctl mask` refuses to replace a unit file in /etc/systemd/system.
+    mkdir -p /usr/local/lib/systemd/system
+    printf '[Unit]\nDescription=osreflog seed\n[Service]\nType=oneshot\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' >"/usr/local/lib/systemd/system/$UNIT"
     systemctl daemon-reload; settle
     local good; good=$(checkpoint "seed unit: good")
     printf 'a\n' >"$DIR/unit-a"; settle
-    systemctl mask "$UNIT" 2>/dev/null; settle
+    systemctl mask "$UNIT" || bad "systemctl mask failed"; settle
     local culprit; culprit=$(cause_of "/etc/systemd/system/$UNIT")
     printf 'b\n' >"$DIR/unit-b"; settle
     printf 'c\n' >"$DIR/unit-c"; settle
@@ -139,7 +147,7 @@ scenario_module() {
     local culprit; culprit=$(cause_of /etc/modprobe.d/osreflog-seed.conf)
     printf 'm2\n' >"$DIR/m2"; settle
     local bad; bad=$(checkpoint "seed module: bad")
-    bisect module vm "$culprit" "$good" "$bad" "modprobe dummy && ! ip link show dummy2 >/dev/null 2>&1"
+    bisect module vm "$culprit" "$good" "$bad" "modprobe -v dummy; cat /etc/modprobe.d/osreflog-seed.conf; ls /sys/class/net; ! test -e /sys/class/net/dummy2"
 }
 
 pgrep -x osreflogd >/dev/null || { echo "osreflogd isn't running" >&2; exit 1; }
