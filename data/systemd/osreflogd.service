@@ -34,7 +34,9 @@ ProtectClock=yes
 ProtectHostname=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
-RestrictSUIDSGID=yes
+# No RestrictSUIDSGID=: systemd implements it with a seccomp filter that makes openat2(2)
+# fail with ENOSYS (it can't inspect the mode inside struct open_how), and undo resolves
+# every path with openat2. Undo refuses to restore set-user-ID/set-group-ID bits itself.
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
