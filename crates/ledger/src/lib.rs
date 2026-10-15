@@ -1427,6 +1427,7 @@ mod tests {
                 uid: 0,
                 cgroup: "/user.slice".into(),
                 command: vec!["sudo".into(), "sed".into()],
+                via: None,
             },
             started_ms,
             ended_ms: started_ms + 10,

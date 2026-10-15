@@ -182,6 +182,10 @@ pub struct Actor {
     pub cgroup: String,
     /// The command line that explains the change (redacted), e.g. `sudo sed -i ... /etc/hosts`.
     pub command: Vec<String>,
+    /// For a change a daemon made because this actor asked over D-Bus: the daemon and the
+    /// method, e.g. `firewalld.service (org.fedoraproject.FirewallD1.config.addZone2)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 /// A group of changes with one actor and one reason, as the live witness saw it.
@@ -370,6 +374,9 @@ pub struct LiveStatus {
     pub ring_drops: u64,
     pub open_causes: u64,
     pub processes: u64,
+    /// Causes credited to a D-Bus caller instead of the daemon that wrote (P4).
+    #[serde(default)]
+    pub delegated: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

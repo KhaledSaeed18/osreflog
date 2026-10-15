@@ -668,6 +668,7 @@ dependencies = [
  "blake3",
  "clap",
  "flate2",
+ "futures-util",
  "libc",
  "osreflog-btrfs",
  "osreflog-fanotify",
