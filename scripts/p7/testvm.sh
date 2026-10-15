@@ -14,6 +14,7 @@
 #   sudo scripts/p7/testvm.sh build    # checkpoint → image (replaces an existing image)
 #   sudo scripts/p7/testvm.sh check    # boot headless, report what the VM sees, power off
 #   sudo scripts/p7/testvm.sh run      # boot on this terminal (serial console; Ctrl-A X quits)
+#   sudo scripts/p7/testvm.sh log      # the last boot's serial log
 #   sudo scripts/p7/testvm.sh delete   # remove the image
 #
 # Left out of the copy: container and VM storage, caches, logs, temp files, Wi-Fi/VPN profiles
@@ -232,6 +233,8 @@ check() {
     local t0=$SECONDS timeout=${TESTVM_TIMEOUT:-600}
     qemu -display none -serial "file:$LOG" -monitor "unix:$MON,server,nowait" &
     local pid=$!
+    # shellcheck disable=SC2064
+    trap "kill $pid 2>/dev/null" EXIT                 # never leave the VM running behind us
     echo "booting (pid $pid, serial log $LOG)…"
     until grep -q TESTVM-READY "$LOG" 2>/dev/null; do
         kill -0 "$pid" 2>/dev/null || { tail -40 "$LOG"; die "qemu exited before the VM reported"; }
@@ -239,14 +242,16 @@ check() {
         sleep 2
     done
     echo "reported after $((SECONDS - t0)) s; qemu RSS $(awk '/VmHWM/ {print int($2/1024) " MiB peak"}' "/proc/$pid/status")"
-    tr -d '\r' <"$LOG" | grep '^TESTVM ' | sed 's/^TESTVM /  /'
+    # Console control sequences can come before a line's text: match anywhere, not at ^.
+    local log
+    log=$(tr -d '\r' <"$LOG" | grep -ao 'TESTVM .*' || true)
+    sed 's/^TESTVM /  /' <<<"$log"
     python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"system_powerdown\n")' "$MON"
     for _ in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     if kill -0 "$pid" 2>/dev/null; then echo "  (no clean poweroff in 60 s: stopped)"; kill "$pid"; fi
     wait "$pid" 2>/dev/null || true
 
-    local fails=0 log entry
-    log=$(tr -d '\r' <"$LOG")
+    local fails=0 entry
     entry=$(cut -d' ' -f3 "$AREA/source")
     report() { if grep -qE "^TESTVM $2" <<<"$log"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
     report "Secure Boot on in the VM" "secureboot SecureBoot enabled"
@@ -254,13 +259,18 @@ check() {
     report "/boot is ext4" "mount /boot [^ ]+ ext4 "
     report "the BLS entry is in place" "entries .*$entry\\.conf"
     report "system running (or degraded: failed units listed above)" "state (running|degraded)"
-    [ "$fails" -eq 0 ] || exit 1
+    if [ "$fails" -ne 0 ]; then
+        echo "--- last 60 lines of the serial log"
+        tr -d '\r' <"$LOG" | tail -60
+        exit 1
+    fi
 }
 
 case "$MODE" in
     build) build ;;
     check) check ;;
     run) ready; qemu -nographic ;;
+    log) tr -d '\r' <"$LOG" ;;
     delete) btrfs subvolume delete "$AREA" >/dev/null && echo "deleted $AREA" ;;
-    *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
