@@ -122,6 +122,14 @@ pub fn classify(path: &str) -> Class {
     }
 }
 
+/// A short reference to a cause, attached to the changes it explains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CauseRef {
+    pub id: i64,
+    pub kind: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
     pub path: String,
@@ -135,6 +143,93 @@ pub struct Change {
     /// What changed: `content`, `mode`, `owner`, `xattr`, `times`, `fileattr`.
     pub what: Vec<String>,
     pub bytes: u64,
+    /// The cause the live witness saw making this change, when it saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<CauseRef>,
+    /// `both` (live and state witness), `bracket` (inside a package transaction the live
+    /// witness bracketed), or `state` (only the snapshot diff saw it). `None` before P3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness: Option<String>,
+}
+
+/// The process a cause is about.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Actor {
+    pub pid: u32,
+    pub comm: String,
+    pub exe: String,
+    pub uid: u32,
+    /// cgroup v2 path, e.g. `/system.slice/tlp.service`.
+    pub cgroup: String,
+    /// The command line that explains the change (redacted), e.g. `sudo sed -i ... /etc/hosts`.
+    pub command: Vec<String>,
+}
+
+/// A group of changes with one actor and one reason, as the live witness saw it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cause {
+    pub id: i64,
+    /// `dnf`, `unit`, `command`, `app` or `unknown`.
+    pub kind: String,
+    pub label: String,
+    pub actor: Actor,
+    pub started_ms: i64,
+    pub ended_ms: i64,
+    pub changes: u64,
+    /// Package-owned paths written inside a dnf transaction, counted rather than listed.
+    pub package_paths: u64,
+}
+
+/// One change as the live witness saw it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveChange {
+    pub ts_ms: i64,
+    pub path: String,
+    /// `create`, `modify`, `delete`, `rename` or `attr`.
+    pub op: String,
+    pub from: Option<String>,
+    /// `file` or `dir`.
+    pub kind: String,
+    /// BLAKE3 of the content after the change, when captured.
+    pub blob: Option<String>,
+    pub size: Option<u64>,
+}
+
+/// A time window in which the live witness may have missed changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gap {
+    pub id: i64,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub reason: String,
+}
+
+/// How much of a diff the live witness explains.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Coverage {
+    /// Changes in `config` paths, and how many have a cause.
+    pub config: u64,
+    pub config_attributed: u64,
+    /// The same over every class except `noise`.
+    pub all: u64,
+    pub all_attributed: u64,
+}
+
+/// One answer to "why did this path change?".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhyEntry {
+    pub cause: Cause,
+    pub change: LiveChange,
+    /// Content before and after, when both are known, text and not secret.
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+/// A cause with every change it made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CauseDetail {
+    pub cause: Cause,
+    pub changes: Vec<LiveChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +309,12 @@ pub struct DiffReport {
     pub changes: Vec<Change>,
     /// How many changes were left out by the class filter.
     pub hidden: u64,
+    /// How many changes the live witness explains (empty before P3).
+    #[serde(default)]
+    pub coverage: Coverage,
+    /// Windows inside this diff where the live witness may have missed changes.
+    #[serde(default)]
+    pub gaps: Vec<Gap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
