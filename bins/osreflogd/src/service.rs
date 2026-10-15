@@ -45,6 +45,7 @@ pub struct Service {
 enum Need {
     Read,
     Checkpoint,
+    Undo,
     Root,
 }
 
@@ -75,6 +76,7 @@ impl Service {
             Need::Root => return Err(Error::NotAuthorized("only root may call this".into())),
             Need::Read => (bus::ACTION_READ, false),
             Need::Checkpoint => (bus::ACTION_CHECKPOINT, true),
+            Need::Undo => (bus::ACTION_UNDO, true),
         };
         let allowed = auth::polkit_allows(connection, &caller, action, interactive)
             .await
@@ -229,6 +231,51 @@ impl Service {
         self.run(move |e| e.cause_detail(id)).await
     }
 
+    /// What undoing cause `id` would do, judged against the live system now (`Preview` as
+    /// JSON). Nothing is written.
+    async fn undo_plan(
+        &self,
+        id: i64,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        self.authorize(&header, c, Need::Read).await?;
+        self.run(move |e| crate::undo::preview(e, id).map(|(_, p)| p))
+            .await
+    }
+
+    /// Undoes cause `id`, if its plan still has `digest` (the one `UndoPlan` showed): a
+    /// verified `pre-undo` checkpoint first, then the sandboxed worker (`Applied` as JSON).
+    async fn undo(
+        &self,
+        id: i64,
+        digest: String,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        let uid = self.authorize(&header, c, Need::Undo).await?;
+        tracing::info!(uid, cause = id, "undo requested");
+        let engine = Arc::clone(&self.engine);
+        let mut applied =
+            tokio::task::spawn_blocking(move || crate::undo::apply(&engine, id, &digest))
+                .await
+                .map_err(|e| Error::Failed(format!("worker failed: {e}")))??;
+        if applied.reloaded_systemd
+            && let Err(e) = reload_systemd(c).await
+        {
+            tracing::warn!(%e, "reloading systemd after the undo failed");
+            applied.reloaded_systemd = false;
+        }
+        tracing::info!(
+            cause = id,
+            restored = applied.report.restored(),
+            conflicts = applied.report.conflicts(),
+            "undo applied"
+        );
+        self.wake.notify_one();
+        serde_json::to_string(&applied).map_err(|e| Error::Failed(e.to_string()))
+    }
+
     /// Why a path changed: its newest live changes, causes, and content before and after
     /// (`[WhyEntry]` as JSON). Secrets are never stored, so never returned.
     async fn why(
@@ -242,6 +289,21 @@ impl Service {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX).clamp(1, 1000);
         self.run(move |e| e.why(&path, limit)).await
     }
+}
+
+/// Reloads systemd after unit files or enablement links were restored, as `systemctl
+/// daemon-reload` does.
+async fn reload_systemd(connection: &zbus::Connection) -> zbus::Result<()> {
+    connection
+        .call_method(
+            Some("org.freedesktop.systemd1"),
+            "/org/freedesktop/systemd1",
+            Some("org.freedesktop.systemd1.Manager"),
+            "Reload",
+            &(),
+        )
+        .await
+        .map(|_| ())
 }
 
 /// Compatibility check that the interface name matches the shared constant.

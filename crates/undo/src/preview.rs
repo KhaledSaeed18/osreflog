@@ -81,6 +81,9 @@ pub struct Applied {
     pub report: Report,
     /// Whether systemd was reloaded because unit files or enablement links changed.
     pub reloaded_systemd: bool,
+    /// The cause the live witness recorded for this undo (undo it to redo the change).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_cause: Option<i64>,
 }
 
 /// The digest of a plan, content included.

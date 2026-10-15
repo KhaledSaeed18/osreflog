@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 osreflog-ledger.workspace = true
 osreflog-model.workspace = true
+osreflog-undo.workspace = true
+rustix.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

@@ -29,6 +29,8 @@ trait Osreflog {
     fn causes(&self, limit: u32) -> zbus::Result<String>;
     fn show(&self, id: i64) -> zbus::Result<String>;
     fn why(&self, path: &str, limit: u32) -> zbus::Result<String>;
+    fn undo_plan(&self, id: i64) -> zbus::Result<String>;
+    fn undo(&self, id: i64, digest: &str) -> zbus::Result<String>;
 }
 
 /// How long the dnf hook waits for the daemon before giving up (and letting dnf continue).
@@ -113,6 +115,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Undo a cause: put back what was there before it, path by path. Without --apply it
+    /// only shows what it would do. A path that changed since is a conflict and is left
+    /// alone; what undo replaces goes to /var/lib/osreflog/attic, never deleted.
+    Undo {
+        /// The cause, e.g. 42 or #42.
+        id: String,
+        /// Apply it (admin authentication; a pre-undo checkpoint is taken first).
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Your own settings changes (dconf/GSettings), newest first, with the app or command
     /// that made each. Recorded by the `osreflog-user` agent in your own ledger.
     User {
@@ -187,6 +201,64 @@ fn print_json(raw: &str) -> anyhow::Result<()> {
     let value: serde_json::Value = serde_json::from_str(raw)?;
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+/// `osreflog undo`: the preview, then (with `--apply`) the undo of exactly that plan. A
+/// package transaction is handed to `dnf5 history undo`, which asks for confirmation itself.
+async fn undo(p: &OsreflogProxy<'_>, id: i64, apply: bool, json: bool) -> anyhow::Result<ExitCode> {
+    let raw = p.undo_plan(id).await.map_err(explain)?;
+    let preview: osreflog_undo::Preview = serde_json::from_str(&raw)?;
+    if !apply {
+        if json {
+            print_json(&raw)?;
+        } else {
+            format::undo_preview(&preview);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(osreflog_undo::Delegation::Dnf { transaction, .. }) = &preview.delegated {
+        format::undo_preview(&preview);
+        if !rustix::process::geteuid().is_root() {
+            bail!("run it as root: sudo dnf5 history undo {transaction}");
+        }
+        let status = std::process::Command::new("dnf5")
+            .args(["history", "undo", &transaction.to_string()])
+            .status()
+            .context("running dnf5")?;
+        return Ok(if status.success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
+    if !json {
+        format::undo_preview(&preview);
+        println!();
+    }
+    if preview.to_restore() == 0 {
+        if !json {
+            println!("nothing to apply.");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let raw = p.undo(id, &preview.digest).await.map_err(explain)?;
+    let applied: osreflog_undo::Applied = serde_json::from_str(&raw)?;
+    if json {
+        print_json(&raw)?;
+    } else {
+        format::undo_applied(&applied);
+    }
+    let clean = applied.report.steps.iter().all(|s| {
+        matches!(
+            s.outcome,
+            osreflog_undo::Outcome::Restored { .. } | osreflog_undo::Outcome::AlreadyUndone
+        )
+    });
+    Ok(if clean {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 /// The dnf5 actions hook. Never blocks or fails a package transaction because of osreflog.
@@ -378,6 +450,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     } else {
                         format::why(&path, &serde_json::from_str::<Vec<WhyEntry>>(&raw)?);
                     }
+                }
+                Cmd::Undo { id, apply, json } => {
+                    let id: i64 = id
+                        .trim_start_matches('#')
+                        .parse()
+                        .context("a cause id, like 12 or #12")?;
+                    return undo(&p, id, apply, json).await;
                 }
                 Cmd::Hook { .. } | Cmd::Doctor | Cmd::User { .. } => bail!("unreachable"),
             }

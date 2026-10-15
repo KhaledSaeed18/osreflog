@@ -16,6 +16,8 @@ pub mod bus {
     pub const ACTION_READ: &str = "io.github.khaledsaeed18.osreflog.read";
     /// Taking a checkpoint by hand: admin authentication, kept for a while.
     pub const ACTION_CHECKPOINT: &str = "io.github.khaledsaeed18.osreflog.checkpoint";
+    /// Undoing a cause: admin authentication every time, never kept.
+    pub const ACTION_UNDO: &str = "io.github.khaledsaeed18.osreflog.undo";
 }
 
 /// Why a checkpoint was taken.

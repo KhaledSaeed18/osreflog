@@ -356,3 +356,106 @@ pub fn why(path: &str, entries: &[WhyEntry]) {
         }
     }
 }
+
+fn short(s: &osreflog_undo::State) -> String {
+    s.to_string()
+}
+
+/// `osreflog undo` without `--apply`: what would happen to each path.
+pub fn undo_preview(p: &osreflog_undo::Preview) {
+    use osreflog_undo::Verdict;
+    println!("undo {}", cause_line(&p.cause));
+    if let Some(osreflog_undo::Delegation::Dnf {
+        transaction,
+        description,
+    }) = &p.delegated
+    {
+        println!("  a package transaction: dnf undoes it, with the rpm database and scriptlets");
+        if !description.is_empty() {
+            println!("  transaction {transaction}: {description}");
+        }
+        println!(
+            "  run: sudo dnf5 history undo {transaction}   (or: sudo osreflog undo {} --apply)",
+            p.cause.id
+        );
+        return;
+    }
+    if p.steps.is_empty() && p.skipped.is_empty() {
+        println!("  nothing recorded for this cause");
+    }
+    for step in &p.steps {
+        let (mark, what) = match &step.verdict {
+            Verdict::Restore => (
+                "~",
+                match &step.restore {
+                    osreflog_undo::State::Absent => "remove (to the attic)".to_owned(),
+                    r => format!("restore {}", short(r)),
+                },
+            ),
+            Verdict::AlreadyUndone => ("=", "already as it was before".to_owned()),
+            Verdict::Conflict => (
+                "!",
+                match &step.current {
+                    Ok(c) => format!(
+                        "conflict: it changed after this cause (now {}, the cause left {})",
+                        short(c),
+                        short(&step.expect)
+                    ),
+                    Err(e) => format!("conflict: unreadable ({e})"),
+                },
+            ),
+            Verdict::Refused { reason } => ("x", format!("refused: {reason}")),
+        };
+        println!("  {mark} {}  {what}", step.path);
+        if step.verdict == Verdict::Restore
+            && let (Some(now), Some(then)) = (&step.current_text, &step.restore_text)
+        {
+            for line in crate::textdiff::unified(now, then, 2).lines().take(40) {
+                println!("      {line}");
+            }
+        }
+    }
+    if !p.skipped.is_empty() {
+        println!("  left alone:");
+        for s in &p.skipped {
+            println!("    {}: {}", s.path, s.reason);
+        }
+    }
+    let n = p.to_restore();
+    if n > 0 {
+        println!(
+            "dry run: nothing changed. {n} path{} to restore: sudo osreflog undo {} --apply",
+            if n == 1 { "" } else { "s" },
+            p.cause.id
+        );
+    }
+}
+
+/// The result of `osreflog undo --apply`.
+pub fn undo_applied(a: &osreflog_undo::Applied) {
+    use osreflog_undo::Outcome;
+    println!(
+        "pre-undo checkpoint {} (c{}), verified",
+        a.pre_undo.name, a.pre_undo.id
+    );
+    for s in &a.report.steps {
+        let line = match &s.outcome {
+            Outcome::Restored { warnings } if warnings.is_empty() => "restored".to_owned(),
+            Outcome::Restored { warnings } => format!("restored ({})", warnings.join("; ")),
+            Outcome::AlreadyUndone => "already as it was before".to_owned(),
+            Outcome::Conflict { current, reason } => {
+                format!("conflict, left alone: {reason} (now {current})")
+            }
+            Outcome::Refused { reason } => format!("refused: {reason}"),
+            Outcome::Failed { error } => format!("failed: {error}"),
+        };
+        println!("  {}  {line}", s.path);
+    }
+    println!("replaced versions are in {}", a.report.attic);
+    if a.reloaded_systemd {
+        println!("systemd reloaded (unit files or enablement links changed)");
+    }
+    if let Some(id) = a.undo_cause {
+        println!("recorded as #{id}; `osreflog undo {id}` puts the change back");
+    }
+}

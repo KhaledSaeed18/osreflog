@@ -454,10 +454,18 @@ pub fn apply(engine: &Engine, id: i64, digest: &str) -> Result<Applied> {
         matches!(s.outcome, osreflog_undo::Outcome::Restored { .. })
             && s.path.starts_with("/etc/systemd/")
     });
+    let label = format!("undo of #{id}");
+    let undo_cause = engine
+        .ledger()
+        .causes(50, Some(pre.created_ms))?
+        .into_iter()
+        .find(|c| c.kind == "undo" && c.label == label)
+        .map(|c| c.id);
     Ok(Applied {
         pre_undo: pre,
         report,
         reloaded_systemd,
+        undo_cause,
     })
 }
 

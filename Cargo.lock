@@ -628,6 +628,8 @@ dependencies = [
  "clap",
  "osreflog-ledger",
  "osreflog-model",
+ "osreflog-undo",
+ "rustix",
  "serde",
  "serde_json",
  "tokio",
