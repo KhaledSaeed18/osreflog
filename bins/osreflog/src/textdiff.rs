@@ -10,58 +10,90 @@ pub enum Edit {
     Add,
 }
 
-/// The shortest edit script turning `a` into `b`, as (edit, line).
+/// Past this many edits the middle is shown as replaced outright: a diff that large isn't
+/// readable line by line, and the search's memory grows with the square of it.
+pub const MAX_EDITS: usize = 1000;
+
+/// The shortest edit script turning `a` into `b`, as (edit, line); for inputs more than
+/// [`MAX_EDITS`] apart, a correct but not minimal one (common ends kept, the middle replaced).
+#[must_use]
+pub fn diff_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(Edit, &'a str)> {
+    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let suffix = a[prefix..]
+        .iter()
+        .rev()
+        .zip(b[prefix..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    let (ma, mb) = (&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix]);
+    let mut out: Vec<(Edit, &'a str)> = a[..prefix].iter().map(|l| (Edit::Keep, *l)).collect();
+    if let Some(middle) = myers(ma, mb) {
+        out.extend(middle);
+    } else {
+        out.extend(ma.iter().map(|l| (Edit::Del, *l)));
+        out.extend(mb.iter().map(|l| (Edit::Add, *l)));
+    }
+    out.extend(a[a.len() - suffix..].iter().map(|l| (Edit::Keep, *l)));
+    out
+}
+
+/// Myers' search, or `None` past [`MAX_EDITS`].
 ///
 /// Myers works in diagonal coordinates `k = x - y`, which go negative; inputs are bounded
-/// (files of at most 1 MiB), so the index casts below can't wrap.
-#[must_use]
+/// (files of at most 1 MiB), so the index casts below can't wrap. Step `d` reads only the
+/// diagonals `-(d+1)..=d+1`, so that window is all the trace keeps for backtracking.
 // n, m, d, k, v, x, y: the paper's names.
 #[allow(
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
     clippy::many_single_char_names
 )]
-pub fn diff_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(Edit, &'a str)> {
+fn myers<'a>(a: &[&'a str], b: &[&'a str]) -> Option<Vec<(Edit, &'a str)>> {
     let (n, m) = (a.len(), b.len());
-    let max = n + m;
-    let offset = max + 1;
+    let max = (n + m).min(MAX_EDITS);
+    let offset = max as isize + 1;
+    let idx = |k: isize| (k + offset) as usize;
     let mut v = vec![0usize; 2 * max + 3];
     let mut trace: Vec<Vec<usize>> = Vec::new();
+    let mut found = false;
     'outer: for d in 0..=max {
-        trace.push(v.clone());
-        for k in (0..=2 * d).step_by(2) {
-            let k = k as isize - d as isize;
-            let idx = (k + offset as isize) as usize;
-            let mut x = if k == -(d as isize) || (k != d as isize && v[idx - 1] < v[idx + 1]) {
-                v[idx + 1]
+        let di = d as isize;
+        trace.push(v[idx(-di - 1)..=idx(di + 1)].to_vec());
+        for k in (-di..=di).step_by(2) {
+            let mut x = if k == -di || (k != di && v[idx(k - 1)] < v[idx(k + 1)]) {
+                v[idx(k + 1)]
             } else {
-                v[idx - 1] + 1
+                v[idx(k - 1)] + 1
             };
             let mut y = (x as isize - k) as usize;
             while x < n && y < m && a[x] == b[y] {
                 x += 1;
                 y += 1;
             }
-            v[idx] = x;
+            v[idx(k)] = x;
             if x >= n && y >= m {
+                found = true;
                 break 'outer;
             }
         }
     }
-    // Backtrack through the saved V arrays.
+    if !found {
+        return None;
+    }
+    // Backtrack through the saved windows; trace[d][j] is diagonal j - (d + 1).
     let mut out = Vec::new();
     let (mut x, mut y) = (n as isize, m as isize);
     for d in (0..trace.len()).rev() {
-        let v = &trace[d];
+        let w = &trace[d];
         let d = d as isize;
+        let at = |k: isize| w[(k + d + 1) as usize];
         let k = x - y;
-        let idx = |k: isize| (k + offset as isize) as usize;
-        let prev_k = if k == -d || (k != d && v[idx(k - 1)] < v[idx(k + 1)]) {
+        let prev_k = if k == -d || (k != d && at(k - 1) < at(k + 1)) {
             k + 1
         } else {
             k - 1
         };
-        let prev_x = v[idx(prev_k)] as isize;
+        let prev_x = at(prev_k) as isize;
         let prev_y = prev_x - prev_k;
         while x > prev_x && y > prev_y {
             out.push((Edit::Keep, a[(x - 1) as usize]));
@@ -79,7 +111,7 @@ pub fn diff_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(Edit, &'a str)> {
         y = prev_y;
     }
     out.reverse();
-    out
+    Some(out)
 }
 
 /// Unified-diff hunks (no file headers) with `context` lines around each change.
@@ -108,9 +140,10 @@ pub fn unified(before: &str, after: &str, context: usize) -> String {
         }
     }
     let mut out = String::new();
+    // Line numbers before each hunk, counted in one pass over the edits.
+    let (mut la, mut lb, mut seen) = (1, 1, 0);
     for (start, end) in hunks {
-        let (mut la, mut lb) = (1, 1);
-        for (e, _) in &edits[..start] {
+        for (e, _) in &edits[seen..start] {
             match e {
                 Edit::Keep => {
                     la += 1;
@@ -120,6 +153,7 @@ pub fn unified(before: &str, after: &str, context: usize) -> String {
                 Edit::Add => lb += 1,
             }
         }
+        seen = start;
         let count_a = edits[start..end]
             .iter()
             .filter(|(e, _)| *e != Edit::Add)
@@ -166,6 +200,32 @@ mod tests {
             .map(|(_, l)| *l)
             .collect();
         assert_eq!(original, a);
+    }
+
+    #[test]
+    fn far_apart_inputs_stay_bounded_and_correct() {
+        let a: Vec<String> = (0..20_000).map(|i| format!("a{i}")).collect();
+        let b: Vec<String> = (0..20_000).map(|i| format!("b{i}")).collect();
+        let (mut a, mut b): (Vec<&str>, Vec<&str>) = (
+            a.iter().map(String::as_str).collect(),
+            b.iter().map(String::as_str).collect(),
+        );
+        a.insert(0, "same head");
+        b.insert(0, "same head");
+        a.push("same tail");
+        b.push("same tail");
+        let edits = diff_lines(&a, &b);
+        let side = |skip: Edit| -> Vec<&str> {
+            edits
+                .iter()
+                .filter(|(e, _)| *e != skip)
+                .map(|(_, l)| *l)
+                .collect()
+        };
+        assert_eq!(side(Edit::Add), a);
+        assert_eq!(side(Edit::Del), b);
+        assert_eq!(edits.first(), Some(&(Edit::Keep, "same head")));
+        assert_eq!(edits.last(), Some(&(Edit::Keep, "same tail")));
     }
 
     #[test]
