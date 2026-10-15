@@ -4,6 +4,8 @@
 //! ```text
 //! bootprobe record RECORD.json
 //! bootprobe prepare RECORD.json N SUBVOL PROBE_ROOT [--install]
+//! bootprobe prep N ROOT_SUBVOL CLONE [HOME_SUBVOL]
+//! bootprobe booted CLONE N
 //! bootprobe arm | verify RECORD.json
 //! bootprobe leftovers | disarm
 //! ```
@@ -14,7 +16,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use osreflog_boot::{Boot, DefaultRecord, kernel};
+use osreflog_boot::{Boot, DefaultRecord, kernel, probe};
 
 fn main() -> ExitCode {
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
@@ -70,6 +72,23 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 entry.display()
             );
         }
+        "prep" => {
+            let prep = probe::Prep {
+                n: arg(1)?.parse()?,
+                root_subvol: arg(2)?.to_owned(),
+                home_subvol: args.get(4).cloned(),
+            };
+            let home = probe::prepare(std::path::Path::new(arg(3)?), &prep)?;
+            println!(
+                "prepared probe {}; home {}",
+                prep.n,
+                serde_json::to_string(&home)?
+            );
+        }
+        "booted" => match probe::booted(std::path::Path::new(arg(1)?), arg(2)?.parse()?) {
+            Some(b) => println!("booted {}", serde_json::to_string(&b)?),
+            None => return Err("no boot record for this probe".into()),
+        },
         "arm" => {
             boot.arm(&read_record(arg(1)?)?)?;
             println!("armed for the next boot");
