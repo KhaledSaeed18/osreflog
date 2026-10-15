@@ -59,6 +59,24 @@ for path, tool in delegated.items():
     check(f"{tool}: credited to the caller, not the daemon", cause.get("kind") == "command", json.dumps(cause))
 wants = [p for p in apply if p.startswith("/etc/systemd/system/multi-user.target.wants/osreflog-workload")]
 check("systemctl enable: credited to the caller", bool(wants) and (apply[wants[0]].get("cause") or {}).get("kind") == "command", json.dumps(apply[wants[0]].get("cause")) if wants else "no symlink")
+revert = {c["path"]: c for c in json.load(open(f"{R}/diff-revert.json"))["changes"]}
+
+
+def summary_has(changes, path, text):
+    lines = (changes.get(path) or {}).get("summary") or []
+    return any(text in l for l in lines), lines
+
+
+for changes, path, text in [
+    (apply, "/etc/localtime", "time zone:"),
+    (apply, "/etc/passwd", "user osreflogwl added"),
+    (apply, "/etc/systemd/system/multi-user.target.wants/osreflog-workload.service", "enabled osreflog-workload.service"),
+    (apply, "/etc/systemd/system/osreflog-workload.service.d/osreflog.conf", "Environment"),
+    (apply, "/etc/sysctl.d/99-osreflog-workload.conf", "new file"),
+    (revert, "/etc/passwd", "user osreflogwl removed"),
+]:
+    ok, lines = summary_has(changes, path, text)
+    check(f"summary of {path}: {text!r}", ok, json.dumps(lines))
 net = json.load(open(f"{R}/diff-net.json"))
 left = [c["path"] for c in net["changes"] if c["class"] == "config" and not times_only(c)]
 print(f"  info {len(left)} config paths differ between start and reverted (rewritten in place, or left by a tool): {left[:12]}")
