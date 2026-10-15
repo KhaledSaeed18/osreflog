@@ -44,9 +44,9 @@ Requires=basic.target
 [Service]
 Type=oneshot
 StandardOutput=journal+console
-ExecStart=/bin/sh -c '/var/lib/osreflog-probe/test > /var/lib/osreflog-probe/output 2>&1; echo $? > /var/lib/osreflog-probe/result; sync'
-SuccessAction=poweroff-force
-FailureAction=poweroff-force
+# Power off right away once the result is written (a VM exits, a booted container ends);
+# P6 found SuccessAction= didn't power the VM off.
+ExecStart=/bin/sh -c '/var/lib/osreflog-probe/test > /var/lib/osreflog-probe/output 2>&1; echo $? > /var/lib/osreflog-probe/result; sync; systemctl poweroff -ff'
 TimeoutStartSec=infinity
 ";
 

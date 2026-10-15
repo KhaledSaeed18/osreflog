@@ -87,15 +87,30 @@ fn vm_hwm_kib(pid: u32) -> Option<u64> {
 }
 
 /// Waits for `child` up to `timeout`, sampling its peak RSS. `None`: killed at the timeout.
-fn wait(child: &mut Child, timeout: Duration) -> (Option<std::process::ExitStatus>, Option<u64>) {
+/// Once `result` exists, the probe has its verdict: the child gets a short grace period to
+/// shut down by itself, then it's stopped (a hung shutdown can't cost the timeout).
+fn wait(
+    child: &mut Child,
+    timeout: Duration,
+    result: &Path,
+) -> (Option<std::process::ExitStatus>, Option<u64>) {
     let deadline = Instant::now() + timeout;
     let mut peak = None;
+    let mut grace: Option<Instant> = None;
     loop {
         if let Some(h) = vm_hwm_kib(child.id()) {
             peak = Some(peak.map_or(h, |p: u64| p.max(h)));
         }
+        if grace.is_none() && result.exists() {
+            grace = Some(Instant::now() + Duration::from_secs(5));
+        }
         match child.try_wait() {
             Ok(Some(status)) => return (Some(status), peak),
+            Ok(None) if grace.is_some_and(|g| Instant::now() >= g) => {
+                let _ = child.kill();
+                let status = child.wait().ok();
+                return (status, peak);
+            }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
             _ => {
                 let _ = child.kill();
@@ -149,7 +164,11 @@ fn nspawn(probe: &Path, spec: &Spec, out: &mut RunResult) {
         out.detail = "systemd-nspawn didn't start".into();
         return;
     };
-    let (status, _) = wait(&mut child, Duration::from_secs(spec.timeout_s));
+    let (status, _) = wait(
+        &mut child,
+        Duration::from_secs(spec.timeout_s),
+        &probe.join(PROBE_DIR).join("result"),
+    );
     out.ms = ms_since(started);
     if status.is_none() {
         out.detail = format!("timed out after {} s", spec.timeout_s);
@@ -288,11 +307,19 @@ fn vm(probe: &Path, cache: &Path, run: &Path, spec: &Spec, out: &mut RunResult) 
         .spawn();
     match child {
         Ok(mut q) => {
-            let (status, peak) = wait(&mut q, Duration::from_secs(spec.timeout_s));
+            let (status, peak) = wait(
+                &mut q,
+                Duration::from_secs(spec.timeout_s),
+                &probe.join(PROBE_DIR).join("result"),
+            );
             out.ms = ms_since(started);
             out.peak_rss_kib = peak;
             if status.is_none() {
-                out.detail = format!("timed out after {} s", spec.timeout_s);
+                out.detail = format!(
+                    "timed out after {} s; the console ended with: {}",
+                    spec.timeout_s,
+                    tail(&std::fs::read_to_string(&console).unwrap_or_default(), 8)
+                );
             }
         }
         Err(e) => out.detail = format!("qemu didn't start: {e}"),

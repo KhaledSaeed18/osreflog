@@ -89,6 +89,7 @@ scenario_config() {
 
 scenario_unit() {
     echo; echo "== unit: a masked unit (nspawn; pid 1 writes the link)"
+    # No systemd runs in an nspawn command probe: systemctl reads the files with --root=/.
     mkdir -p "$DIR"
     printf '[Unit]\nDescription=osreflog seed\n[Service]\nType=oneshot\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' >"/etc/systemd/system/$UNIT"
     systemctl daemon-reload; settle
@@ -99,7 +100,7 @@ scenario_unit() {
     printf 'b\n' >"$DIR/unit-b"; settle
     printf 'c\n' >"$DIR/unit-c"; settle
     local bad; bad=$(checkpoint "seed unit: bad")
-    bisect unit nspawn "$culprit" "$good" "$bad" "test \"\$(systemctl is-enabled $UNIT 2>/dev/null)\" != masked"
+    bisect unit nspawn "$culprit" "$good" "$bad" "test \"\$(systemctl --root=/ is-enabled $UNIT 2>/dev/null)\" != masked"
 }
 
 scenario_sysctl() {
@@ -130,6 +131,7 @@ scenario_package() {
 
 scenario_module() {
     echo; echo "== module: a kernel module option (vm: only a booted kernel reads it)"
+    # numdummies=3 makes dummy0..dummy2 (the default is one); the parameter isn't in sysfs.
     mkdir -p "$DIR"
     local good; good=$(checkpoint "seed module: good")
     printf 'm1\n' >"$DIR/m1"; settle
@@ -137,7 +139,7 @@ scenario_module() {
     local culprit; culprit=$(cause_of /etc/modprobe.d/osreflog-seed.conf)
     printf 'm2\n' >"$DIR/m2"; settle
     local bad; bad=$(checkpoint "seed module: bad")
-    bisect module vm "$culprit" "$good" "$bad" "modprobe dummy && test \"\$(cat /sys/module/dummy/parameters/numdummies)\" != 3"
+    bisect module vm "$culprit" "$good" "$bad" "modprobe dummy && ! ip link show dummy2 >/dev/null 2>&1"
 }
 
 pgrep -x osreflogd >/dev/null || { echo "osreflogd isn't running" >&2; exit 1; }
