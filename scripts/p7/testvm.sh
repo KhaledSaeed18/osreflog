@@ -13,6 +13,7 @@
 #
 #   sudo scripts/p7/testvm.sh build    # checkpoint → image (replaces an existing image)
 #   sudo scripts/p7/testvm.sh check    # boot headless, report what the VM sees, power off
+#   sudo scripts/p7/testvm.sh flow STEP [FILES...]   # a multi-boot test (STEP runs at each boot)
 #   sudo scripts/p7/testvm.sh run      # boot on this terminal (serial console; Ctrl-A X quits)
 #   sudo scripts/p7/testvm.sh log      # the last boot's serial log
 #   sudo scripts/p7/testvm.sh delete   # remove the image
@@ -41,6 +42,50 @@ LOG=$AREA/serial.log
 MON=$AREA/monitor.sock
 
 die() { echo "testvm: $*" >&2; exit 1; }
+
+# The report every boot prints on the serial console (one TESTVM line per fact), and the
+# unit that runs it. Written by `build`, and again by `flow` so older images get updates.
+guest_files() {
+    local R=$1
+    cat >"$R/usr/local/libexec/osreflog-testvm-check" <<'EOF'
+#!/bin/bash
+state=$(systemctl is-system-running --wait 2>/dev/null)
+say() { echo "TESTVM $*"; }
+say "kernel $(uname -r)"
+say "cmdline $(cat /proc/cmdline)"
+say "secureboot $(mokutil --sb-state 2>&1 | head -1)"
+say "lockdown $(cat /sys/kernel/security/lockdown 2>&1)"
+say "selinux $(getenforce)"
+for m in / /boot /boot/efi /home; do say "mount $m $(findmnt -no SOURCE,FSTYPE,OPTIONS "$m")"; done
+say "grubenv $(grub2-editenv list 2>&1 | tr '\n' ' ')"
+say "entries $(ls /boot/loader/entries | tr '\n' ' ')"
+say "osreflogd $(systemctl is-active osreflogd)"
+say "boot $(systemd-analyze 2>/dev/null | head -1)"
+say "state $state"
+systemctl --failed --plain --no-legend | awk '{print "TESTVM failed " $1}'
+echo TESTVM-READY
+# A multi-boot test installed by `flow`: one step per boot, its state kept in /home.
+step=/usr/local/libexec/osreflog-testvm-step
+if [ -x "$step" ]; then "$step" 2>&1 | sed -u 's/^/TESTVM /'; fi
+EOF
+    chmod 0755 "$R/usr/local/libexec/osreflog-testvm-check"
+    cat >"$R/etc/systemd/system/osreflog-testvm-check.service" <<'EOF'
+[Unit]
+Description=osreflog test VM: report state on the console
+After=multi-user.target
+
+[Service]
+# exec, not oneshot: the boot must finish without waiting for this unit, which waits for the boot.
+Type=exec
+ExecStart=/usr/local/libexec/osreflog-testvm-check
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    ln -sf /etc/systemd/system/osreflog-testvm-check.service \
+        "$R/etc/systemd/system/multi-user.target.wants/osreflog-testvm-check.service"
+}
 
 build() {
     command -v osreflog >/dev/null || die "osreflog is not installed (scripts/install-dev.sh)"
@@ -110,42 +155,7 @@ EOF
 ExecStart=
 ExecStart=-/usr/sbin/agetty -o '-p -f -- \\u' --noclear --autologin root --keep-baud 115200,57600,38400,9600 - $TERM
 EOF
-    # What `check` reads back: one TESTVM line per fact, on the serial console.
-    cat >"$R/usr/local/libexec/osreflog-testvm-check" <<'EOF'
-#!/bin/bash
-state=$(systemctl is-system-running --wait 2>/dev/null)
-say() { echo "TESTVM $*"; }
-say "kernel $(uname -r)"
-say "cmdline $(cat /proc/cmdline)"
-say "secureboot $(mokutil --sb-state 2>&1 | head -1)"
-say "lockdown $(cat /sys/kernel/security/lockdown 2>&1)"
-say "selinux $(getenforce)"
-for m in / /boot /boot/efi /home; do say "mount $m $(findmnt -no SOURCE,FSTYPE,OPTIONS "$m")"; done
-say "grubenv $(grub2-editenv list 2>&1 | tr '\n' ' ')"
-say "entries $(ls /boot/loader/entries | tr '\n' ' ')"
-say "osreflogd $(systemctl is-active osreflogd)"
-say "boot $(systemd-analyze 2>/dev/null | head -1)"
-say "state $state"
-systemctl --failed --plain --no-legend | awk '{print "TESTVM failed " $1}'
-echo TESTVM-READY
-EOF
-    chmod 0755 "$R/usr/local/libexec/osreflog-testvm-check"
-    cat >"$R/etc/systemd/system/osreflog-testvm-check.service" <<'EOF'
-[Unit]
-Description=osreflog test VM: report state on the console
-After=multi-user.target
-
-[Service]
-# exec, not oneshot: the boot must finish without waiting for this unit, which waits for the boot.
-Type=exec
-ExecStart=/usr/local/libexec/osreflog-testvm-check
-StandardOutput=journal+console
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    ln -sf /etc/systemd/system/osreflog-testvm-check.service \
-        "$R/etc/systemd/system/multi-user.target.wants/osreflog-testvm-check.service"
+    guest_files "$R"
 
     # /boot: one kernel, its initramfs, this machine's GRUB config with the image's UUIDs.
     mount "${loop}p2" "$R/boot"
@@ -229,7 +239,9 @@ qemu() {
         -nic none "$@"
 }
 
-check() {
+# Boots the image headless until the serial log has a line matching $1 (or qemu exits, or
+# TESTVM_TIMEOUT passes), prints the TESTVM lines, and powers the VM off. Sets LINES.
+boot_until() {
     ready
     rm -f "$LOG" "$MON"
     local t0=$SECONDS timeout=${TESTVM_TIMEOUT:-600}
@@ -238,24 +250,26 @@ check() {
     # shellcheck disable=SC2064
     trap "kill $pid 2>/dev/null" EXIT                 # never leave the VM running behind us
     echo "booting (pid $pid, serial log $LOG)…"
-    until grep -q TESTVM-READY "$LOG" 2>/dev/null; do
+    until grep -aqE "$1" "$LOG" 2>/dev/null; do
         kill -0 "$pid" 2>/dev/null || { tail -40 "$LOG"; die "qemu exited before the VM reported"; }
         [ $((SECONDS - t0)) -lt "$timeout" ] || { tail -40 "$LOG"; kill "$pid"; die "no report in $timeout s"; }
         sleep 2
     done
     echo "reported after $((SECONDS - t0)) s; qemu RSS $(awk '/VmHWM/ {print int($2/1024) " MiB peak"}' "/proc/$pid/status")"
     # Console control sequences can come before a line's text: match anywhere, not at ^.
-    local log
-    log=$(tr -d '\r' <"$LOG" | grep -ao 'TESTVM .*' || true)
-    sed 's/^TESTVM /  /' <<<"$log"
+    LINES=$(tr -d '\r' <"$LOG" | grep -ao 'TESTVM.*' || true)
+    sed 's/^TESTVM /  /' <<<"$LINES"
     python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"system_powerdown\n")' "$MON"
     for _ in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     if kill -0 "$pid" 2>/dev/null; then echo "  (no clean poweroff in 60 s: stopped)"; kill "$pid"; fi
     wait "$pid" 2>/dev/null || true
+}
 
+check() {
+    boot_until TESTVM-READY
     local fails=0 entry
     entry=$(cut -d' ' -f3 "$AREA/source")
-    report() { if grep -qE "^TESTVM $2" <<<"$log"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
+    report() { if grep -qE "^TESTVM $2" <<<"$LINES"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
     report "Secure Boot on in the VM" "secureboot SecureBoot enabled"
     report "/ is the image's root subvolume" "mount / .*subvol=/root"
     report "/boot is ext4" "mount /boot [^ ]+ ext4 "
@@ -268,11 +282,42 @@ check() {
     fi
 }
 
+# Installs STEP (run once per boot after the report) and FILES (into /usr/local/bin) in the
+# image, then boots until the step prints TESTVM-DONE or TESTVM-FAIL.
+flow() {
+    local step=${1:-}
+    [ -f "$step" ] || die "usage: $0 flow STEP [FILES...]"
+    shift
+    ready
+    local loop W=/run/osreflog-testvm/img
+    loop=$(losetup -fP --show "$DISK")
+    # shellcheck disable=SC2064
+    trap "umount -R $W 2>/dev/null; losetup -d $loop" EXIT
+    mkdir -p "$W"
+    mount -o subvol=root "${loop}p3" "$W"
+    mount -o subvol=home "${loop}p3" "$W/home"
+    guest_files "$W"
+    install -m 0755 "$step" "$W/usr/local/libexec/osreflog-testvm-step"
+    local f
+    for f in "$@"; do install -m 0755 "$f" "$W/usr/local/bin/"; done
+    rm -rf "$W/home/.testvm"
+    setfiles -r "$W" "$W/etc/selinux/targeted/contexts/files/file_contexts" \
+        "$W/usr/local/libexec" "$W/usr/local/bin" "$W/etc/systemd/system"
+    sync
+    umount -R "$W"
+    losetup -d "$loop"
+    trap - EXIT
+    TESTVM_TIMEOUT=${TESTVM_TIMEOUT:-1200} boot_until 'TESTVM (DONE|FAIL)'
+    grep -q '^TESTVM DONE' <<<"$LINES" || { echo "FAIL $(basename "$step")"; exit 1; }
+    echo "ok   $(basename "$step")"
+}
+
 case "$MODE" in
     build) build ;;
     check) check ;;
+    flow) shift; flow "$@" ;;
     run) ready; qemu -nographic ;;
     log) tr -d '\r' <"$LOG" ;;
     delete) btrfs subvolume delete "$AREA" >/dev/null && echo "deleted $AREA" ;;
-    *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
