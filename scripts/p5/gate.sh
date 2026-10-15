@@ -38,7 +38,6 @@ chcon -t bin_t "$AREA"/bin/* 2>/dev/null || true
 btrfs subvolume snapshot / "$AREA/root" >/dev/null
 echo "scratch root: a writable snapshot of / at $AREA/root"
 echo "kernel $(uname -r), SELinux $(getenforce)"
-echo "sandbox: osreflogd.service's ${#HARDENING[@]} hardening settings, scratch area writable"
 
 # The daemon's own sandbox: every hardening directive of its unit, so the matrix runs under
 # exactly the restrictions the undo worker has (P5 found RestrictSUIDSGID= blocking openat2
@@ -48,6 +47,7 @@ while IFS= read -r line; do
     HARDENING+=(-p "$line")
 done < <(sed -n '/^\[Service\]/,/^\[/p' "$REPO/data/systemd/osreflogd.service" \
     | grep -E '^(Protect|Restrict|Private|LockPersonality|MemoryDenyWriteExecute|SystemCallArchitectures|SystemCallFilter|NoNewPrivileges|CapabilityBoundingSet|IPAddressDeny)[A-Za-z]*=')
+echo "sandbox: osreflogd.service's $(( ${#HARDENING[@]} / 2 )) hardening settings, scratch area writable"
 run() {
     local unit=$1; shift
     if ! systemd-run --wait --pipe --collect --quiet --unit="$unit" \
