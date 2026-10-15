@@ -17,8 +17,9 @@ Nice=5
 
 # Hardening that P2 is known to work with; P8 tightens it (system call filter, SELinux).
 # CAP_SYS_ADMIN: mounts, btrfs ioctls, fanotify filesystem marks; CAP_DAC_READ_SEARCH:
-# open_by_handle_at; CAP_BPF + CAP_PERFMON: the lineage eBPF program.
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_BPF CAP_PERFMON
+# open_by_handle_at; CAP_BPF + CAP_PERFMON: the lineage eBPF program; CAP_CHOWN, CAP_FOWNER,
+# CAP_DAC_OVERRIDE: the undo worker (owners, modes and labels of restored files).
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_BPF CAP_PERFMON
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
