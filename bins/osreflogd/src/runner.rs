@@ -16,6 +16,8 @@ use crate::layout::would_propagate;
 use crate::probe::{PROBE_DIR, newest_kernel};
 
 pub const FLAG: &str = "--probe-runner";
+/// The runner's result, inside the probe's `PROBE_DIR`.
+pub const RESULT_FILE: &str = "runner.json";
 const RUN_DIR: &str = "/run/osreflog-probe";
 /// Free memory a VM probe needs beyond its guest RAM before it starts.
 const VM_HEADROOM_MIB: u64 = 256;
@@ -344,6 +346,10 @@ fn run(spec: &Spec) -> RunResult {
         Tier::Vm => vm(&probe, &top.join("osreflog/cache"), &run, spec, &mut out),
     }
     out.verdict = out.exit_code.map(Verdict::from_exit);
+    // The daemon reads the result from the probe once this unit has ended.
+    if let Ok(json) = serde_json::to_vec(&out) {
+        let _ = std::fs::write(probe.join(PROBE_DIR).join(RESULT_FILE), json);
+    }
     let _ = unmount(&top, UnmountFlags::DETACH);
     let _ = std::fs::remove_dir_all(&run);
     out

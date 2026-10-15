@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use osreflog_bisect::{
@@ -18,7 +17,7 @@ use osreflog_model::{Checkpoint, Class, classify};
 use crate::blobs::Blobs;
 use crate::engine::{Engine, EngineError, now_ms};
 use crate::probe;
-use crate::runner::{FLAG, RunResult, Spec};
+use crate::runner::{FLAG, RESULT_FILE, RunResult, Spec};
 
 type Result<T> = std::result::Result<T, EngineError>;
 
@@ -156,35 +155,29 @@ impl Session<'_> {
         else {
             return fail("can't start the runner".into());
         };
-        let out = Command::new("systemd-run")
-            .args(["--wait", "--pipe", "--collect", "--quiet"])
-            .arg(format!("--unit=osreflog-{}", p.name))
-            // Delegate: nspawn --keep-unit makes sub-cgroups for the container.
-            .args([
-                "-p",
-                "PrivateMounts=yes",
-                "-p",
-                "Delegate=yes",
-                "-p",
-                "Nice=10",
-            ])
-            .arg("-p")
-            .arg(format!("MemoryMax={}M", mem_mib + 1024))
-            .arg("-p")
-            .arg(format!("RuntimeMaxSec={}", timeout_s + 600))
-            .arg(exe)
-            .arg(FLAG)
-            .arg(spec_json)
-            .stdin(Stdio::null())
-            .output();
-        match out {
-            Ok(o) => serde_json::from_slice(&o.stdout).unwrap_or_else(|_| {
-                fail(format!(
-                    "the runner failed: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ))
-            }),
-            Err(e) => fail(format!("systemd-run: {e}")),
+        let unit = format!("osreflog-{}.service", p.name);
+        let result_file = p.path().join(probe::PROBE_DIR).join(RESULT_FILE);
+        let _ = std::fs::remove_file(&result_file);
+        let deadline = std::time::Duration::from_secs(timeout_s + 600);
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => return fail(format!("runtime: {e}")),
+        };
+        let started = rt.block_on(start_unit(
+            &unit, exe, &spec_json, mem_mib, timeout_s, deadline,
+        ));
+        if let Err(e) = started {
+            return fail(format!("starting {unit}: {e}"));
+        }
+        match std::fs::read(&result_file) {
+            Ok(json) => serde_json::from_slice(&json)
+                .unwrap_or_else(|e| fail(format!("the runner's result didn't parse: {e}"))),
+            Err(_) => fail(format!(
+                "the runner left no result: journalctl -u {unit} has its output"
+            )),
         }
     }
 
@@ -394,6 +387,80 @@ impl Session<'_> {
                     .collect(),
             },
         })
+    }
+}
+
+/// Starts the runner as a transient unit through systemd's D-Bus API and waits until the unit
+/// is gone. `PrivateMounts`: the runner mounts the btrfs top level in its own namespace;
+/// `Delegate`: nspawn `--keep-unit` makes sub-cgroups for the container.
+async fn start_unit(
+    unit: &str,
+    exe: std::path::PathBuf,
+    spec_json: &str,
+    mem_mib: u64,
+    timeout_s: u64,
+    deadline: std::time::Duration,
+) -> zbus::Result<()> {
+    use zbus::zvariant::Value;
+    let conn = zbus::Connection::system().await?;
+    let exe = exe.to_string_lossy().into_owned();
+    let exec: Vec<(String, Vec<String>, bool)> = vec![(
+        exe.clone(),
+        vec![exe, FLAG.to_owned(), spec_json.to_owned()],
+        false,
+    )];
+    let props: Vec<(&str, Value<'_>)> = vec![
+        ("Description", Value::from("osreflog bisect probe")),
+        ("ExecStart", Value::from(exec)),
+        ("PrivateMounts", Value::from(true)),
+        ("Delegate", Value::from(true)),
+        ("Nice", Value::from(10i32)),
+        ("MemoryMax", Value::from((mem_mib + 1024) * 1024 * 1024)),
+        ("RuntimeMaxUSec", Value::from((timeout_s + 600) * 1_000_000)),
+        ("CollectMode", Value::from("inactive-or-failed")),
+    ];
+    let aux: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
+    let manager = |method: &'static str| {
+        (
+            Some("org.freedesktop.systemd1"),
+            "/org/freedesktop/systemd1",
+            Some("org.freedesktop.systemd1.Manager"),
+            method,
+        )
+    };
+    let (d, path, iface, method) = manager("StartTransientUnit");
+    conn.call_method(d, path, iface, method, &(unit, "fail", props, aux))
+        .await?;
+    // Wait until the unit has ended (and been collected).
+    let started = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let (d, path, iface, method) = manager("GetUnit");
+        let Ok(reply) = conn.call_method(d, path, iface, method, &(unit,)).await else {
+            return Ok(());
+        };
+        let unit_path: zbus::zvariant::OwnedObjectPath = reply.body().deserialize()?;
+        let state = conn
+            .call_method(
+                Some("org.freedesktop.systemd1"),
+                unit_path.as_str(),
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &("org.freedesktop.systemd1.Unit", "ActiveState"),
+            )
+            .await?;
+        let state: zbus::zvariant::OwnedValue = state.body().deserialize()?;
+        let state = String::try_from(state).unwrap_or_default();
+        if matches!(state.as_str(), "inactive" | "failed") {
+            return Ok(());
+        }
+        if started.elapsed() > deadline {
+            let (d, path, iface, method) = manager("StopUnit");
+            let _ = conn
+                .call_method(d, path, iface, method, &(unit, "replace"))
+                .await;
+            return Ok(());
+        }
     }
 }
 
