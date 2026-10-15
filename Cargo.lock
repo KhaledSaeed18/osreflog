@@ -650,6 +650,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "osreflog-fuzz"
+version = "0.1.0"
+dependencies = [
+ "fastrand",
+ "osreflog-btrfs",
+ "osreflog-fanotify",
+ "osreflog-ledger",
+ "osreflog-rpm",
+ "osreflog-semantic",
+ "rustix",
+ "serde_json",
+]
+
+[[package]]
 name = "osreflog-ledger"
 version = "0.1.0"
 dependencies = [

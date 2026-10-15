@@ -1,0 +1,22 @@
+[package]
+name = "osreflog-fuzz"
+description = "A long-running randomized harness for every osreflog parser and differ (stable toolchain, no instrumentation)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+osreflog-btrfs.workspace = true
+osreflog-fanotify.workspace = true
+osreflog-ledger.workspace = true
+osreflog-rpm.workspace = true
+osreflog-semantic = { path = "../crates/semantic" }
+fastrand = "2"
+rustix.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
