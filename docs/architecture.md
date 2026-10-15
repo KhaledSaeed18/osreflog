@@ -6,8 +6,8 @@
 | --------- | ------- | -------- | -------------- |
 | `osreflogd` | root, systemd service, hardened | Rust | Live capture, cause assembly, checkpoints, diffing, ledger, bisect orchestration, undo |
 | `osreflog` | user | Rust | CLI: `log`, `show`, `diff`, `why`, `blame`, `bisect`, `undo`, `checkpoint`, `doctor` |
-| `osreflog-user` | user, systemd user service | Rust | Optional user scope: dconf writes and `~/.config`, attributed to apps |
-| `osreflog-parse` | sandboxed worker, no capabilities | Rust | Parses untrusted file content into semantic diffs (seccomp + Landlock) |
+| `osreflog-user` | user, systemd user service | Rust | Optional user scope: dconf (GSettings) writes, credited to the app or command that asked, in the user's own ledger ([ADR 0010](./decisions/0010-user-scope-own-ledger.md)) |
+| summarize worker | `osreflogd --summarize-worker`, sandboxed, no capabilities | Rust | Turns untrusted file content into semantic summaries (rlimits, Landlock, seccomp allowlist) |
 | eBPF programs | kernel | Rust (aya-ebpf) | Process lineage: fork/exec/exit tracepoints → ring buffer |
 | dnf5 hook | runs inside dnf5 | actions file + CLI call | Synchronous pre/post-transaction checkpoints |
 | GNOME app | user | Rust, GTK4/libadwaita | Timeline, cause details, bisect wizard (late phase) |

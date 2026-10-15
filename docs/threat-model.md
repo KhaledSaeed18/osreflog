@@ -27,7 +27,7 @@ osreflogd is a root daemon that watches the system's config files, records every
 - A denylist, never stored as content, only "changed" + hash: `/etc/shadow`, `/etc/gshadow`, `/etc/NetworkManager/system-connections/*`, `/etc/ssh/ssh_host_*_key`, `/etc/pki/**/private/*`, `*.key`, `/etc/wireguard/*`, `/etc/crypttab`, `/etc/security/opasswd`.
 - Heuristic: a root-owned file with mode `0600`/`0400` is treated as secret unless allowlisted.
 - Key-level redaction in semantic diffs: `psk=`, `password=`, `secret=`, `token=`, `private-key=`.
-- argv redaction: common secret flags (`--password`, `-p<value>` for known tools, `TOKEN=` env-style args); full argv is not stored for `command` causes, only the top command plus a redacted argv.
+- argv redaction: secret flags (`--password x`, `--token=x`), `NAME_TOKEN=x` arguments, URL passwords, and the value after a positional key that names a secret (`dconf write …/api-key x`, `gsettings set org.app password x`, `nmcli … wifi-sec.psk x`). Full argv is not stored for `command` causes, only the top command plus a redacted argv.
 - The ledger is `root:osreflog 0640`, D-Bus reads are polkit-gated, and nothing leaves the machine. There is no network code in osreflogd at all.
 
 **Undo as a root write primitive (A1)**
@@ -37,9 +37,14 @@ osreflogd is a root daemon that watches the system's config files, records every
 - polkit `auth_admin` (not `_keep`) for `--apply` on package causes and boot config.
 
 **Parsers (A2)**
-- All content parsing runs in `osreflog-parse`: a separate process with no capabilities, `PR_SET_NO_NEW_PRIVS`, a seccomp allowlist (read/write on inherited pipes, mmap, exit), a Landlock ruleset with no filesystem access at all, and memory and CPU limits via its own cgroup. Content goes in over a pipe; a structured diff comes out.
-- Size caps per file (1 MiB) and per diff (output truncated, marked).
-- Rust + `#![forbid(unsafe_code)]` in `parse/`; fuzz each differ (cargo-fuzz) from P4 on.
+- All content parsing runs in a summarize worker (`osreflogd --summarize-worker`, built in P4): a separate process that, before reading any input, sets resource limits (512 MiB address space, 5 s CPU, no file writes, no new processes), drops every capability, sets no-new-privileges, enters a Landlock domain with every filesystem and network right handled and none granted, and installs a seccomp allowlist that kills the process on anything else (read, write, memory, signals for its own abort, exit). Content goes in over a pipe as JSON; summaries come out. The daemon gives it 10 s.
+- Size caps per file (1 MiB) and per summary (12 lines of 200 characters).
+- The semantic crate has no unsafe code. A stable-toolchain harness (`fuzz/`, `scripts/p4/fuzz.sh`) fuzzes every parser and differ, including the send-stream parser, the rpm header parser and the fanotify event parser, which read kernel or root-written data. It checks bounded output, bounded CPU time and round trips, not only panics. rpm version comparison is also tested differentially against rpm's own.
+
+**User scope**
+- `osreflog-user` runs as the user and writes only the user's own ledger (`~/.local/state/osreflog/user.db`, directory `0700`). Nothing about one user's settings reaches the root daemon or other users ([ADR 0010](./decisions/0010-user-scope-own-ledger.md)).
+- Values of keys whose names contain `password`, `psk`, `secret`, `token`, `api-key`, `private`… are shown as `***`, both in summaries and in the recorded command line. Values are cut at 100 characters.
+- The user ledger is only as trustworthy as the user's account: it is a record for the user, not evidence for the admin.
 
 **Floods (A3)**
 - Bounded per-actor memory in the cause builder; coalesce repeated writes to the same path within a cause.
