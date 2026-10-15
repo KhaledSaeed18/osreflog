@@ -13,3 +13,4 @@ One file per decision: context, decision, alternatives, consequences. Superseded
 | [0007](./0007-undo-delegates-packages.md) | Undo restores files itself, delegates packages to dnf5 | Accepted |
 | [0008](./0008-dbus-polkit.md) | D-Bus system service + polkit | Accepted |
 | [0009](./0009-name-osreflog.md) | Name: osreflog | Accepted |
+| [0010](./0010-user-scope-own-ledger.md) | User scope: an agent per user, with the user's own ledger | Accepted |
