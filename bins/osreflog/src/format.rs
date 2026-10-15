@@ -167,7 +167,7 @@ pub fn diff(r: &DiffReport, stat_only: bool) {
     }
     if r.hidden > 0 {
         println!(
-            "\n{} package-owned and noise paths hidden (--all to show)",
+            "\n{} package-owned, noise and times-only paths hidden (--all to show)",
             r.hidden
         );
     }

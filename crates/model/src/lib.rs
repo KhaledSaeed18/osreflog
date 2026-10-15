@@ -209,7 +209,8 @@ pub struct DiffReport {
     pub counts: ClassCounts,
     pub packages: Vec<PackageChange>,
     pub transactions: Vec<Transaction>,
-    /// The changes requested (by default everything except `package` and `noise`).
+    /// The changes requested: by default everything except `package` and `noise` paths and
+    /// times-only modifications.
     pub changes: Vec<Change>,
     /// How many changes were left out by the class filter.
     pub hidden: u64,

@@ -18,7 +18,7 @@ use osreflog_ledger::retention::{self, Policy};
 use osreflog_ledger::{Interval, Ledger, LedgerError};
 use osreflog_model::{
     Change, Checkpoint, Class, ClassCounts, DiffReport, Endpoint, LogEntry, PackageChange, Status,
-    VerifyReport, classify, reason,
+    Transaction, VerifyReport, classify, reason,
 };
 use osreflog_rpm::Package;
 
@@ -26,7 +26,8 @@ use crate::layout::Layout;
 
 const RPMDB_PREFIX: &str = "/usr/lib/sysimage/rpm/";
 const HISTORY_PREFIX: &str = "/usr/lib/sysimage/libdnf5/";
-/// Slack around checkpoint times when matching dnf transactions (seconds).
+/// Slack after the newer checkpoint when matching dnf transactions (seconds): dnf records
+/// the end time after the post-transaction hook has run.
 const TRANSACTION_SLACK_S: i64 = 5;
 const SCHEDULED_EVERY_MS: i64 = 24 * 3600 * 1000;
 
@@ -270,12 +271,8 @@ impl Engine {
             let _ = ioctl::delete_subvolume(self.layout.snapshots_fd(), &name);
             return Err(e.into());
         }
-        tracing::info!(
-            id,
-            reason = why,
-            ms = ms_of(started.elapsed()),
-            "checkpoint"
-        );
+        let ms = ms_of(started.elapsed());
+        tracing::info!(id, reason = why, ms, "checkpoint {name} ({why}) in {ms} ms");
         Ok(checkpoint)
     }
 
@@ -365,12 +362,7 @@ impl Engine {
         }
 
         let transactions = if rpm_changed || history_changed {
-            osreflog_rpm::transactions(
-                to.root,
-                &self.layout.tmp(),
-                from.created_ms / 1000 - TRANSACTION_SLACK_S,
-                to.created_ms / 1000 + TRANSACTION_SLACK_S,
-            )?
+            self.transactions_between(from, to)?
         } else {
             Vec::new()
         };
@@ -387,6 +379,37 @@ impl Engine {
             packages,
             transactions,
         })
+    }
+
+    /// The dnf transactions of an interval: those in the newer side's history that the older
+    /// snapshot's history doesn't already show as finished. dnf's whole-second times can't
+    /// separate a transaction from a checkpoint taken in the same second; the histories can.
+    /// Without the older snapshot (pruned), the time window alone decides.
+    fn transactions_between(&self, from: &Checkpoint, to: &Target<'_>) -> Result<Vec<Transaction>> {
+        let from_s = from.created_ms / 1000;
+        let mut found = osreflog_rpm::transactions(
+            to.root,
+            &self.layout.tmp(),
+            from_s,
+            to.created_ms / 1000 + TRANSACTION_SLACK_S,
+        )?;
+        if from.pruned_ms.is_none() {
+            let before = osreflog_rpm::transactions(
+                &self.layout.snapshot_path(&from.name),
+                &self.layout.tmp(),
+                from_s,
+                i64::MAX,
+            )?;
+            let finished: std::collections::HashSet<i64> = before
+                .iter()
+                .filter(|t| t.end.is_some())
+                .map(|t| t.id)
+                .collect();
+            found.retain(|t| !finished.contains(&t.id));
+        } else {
+            found.retain(|t| t.end.is_none_or(|end| end > from_s));
+        }
+        Ok(found)
     }
 
     fn compute_between(&self, from: &Checkpoint, to: &Checkpoint) -> Result<Interval> {
@@ -426,7 +449,12 @@ impl Engine {
                 changes = iv.changes.len(),
                 packages = iv.packages.len(),
                 ms = iv.duration_ms,
-                "interval"
+                "interval {}..{}: {} changes, {} package changes, in {} ms",
+                from.name,
+                to.name,
+                iv.changes.len(),
+                iv.packages.len(),
+                iv.duration_ms
             );
             lock(&self.ledger).store_interval(&iv)?;
         }
@@ -458,7 +486,7 @@ impl Engine {
                 Err(e) => return Err(io(format!("deleting {}", c.name))(e)),
             }
             lock(&self.ledger).mark_pruned(id, now_ms())?;
-            tracing::info!(id, "pruned snapshot");
+            tracing::info!(id, "pruned the snapshot of {}", c.name);
             pruned.push(id);
         }
         Ok(pruned)
@@ -602,6 +630,13 @@ impl Engine {
     }
 }
 
+/// Package-owned and noise paths are hidden by default, and so are files whose only change is
+/// their times (mostly `relatime` access-time updates on files that were read or run).
+fn shown_by_default(c: &Change) -> bool {
+    let times_only = c.op == "modify" && c.what.len() == 1 && c.what[0] == "times";
+    !matches!(c.class, Class::Package | Class::Noise) && !times_only
+}
+
 fn report(from: Endpoint, to: Endpoint, iv: Interval, cached: bool, all: bool) -> DiffReport {
     let mut counts = ClassCounts::default();
     for c in &iv.changes {
@@ -611,7 +646,7 @@ fn report(from: Endpoint, to: Endpoint, iv: Interval, cached: bool, all: bool) -
     let changes: Vec<Change> = iv
         .changes
         .into_iter()
-        .filter(|c| all || !matches!(c.class, Class::Package | Class::Noise))
+        .filter(|c| all || shown_by_default(c))
         .collect();
     let hidden = total - changes.len() as u64;
     DiffReport {

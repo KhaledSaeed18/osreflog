@@ -52,7 +52,8 @@ restorecon -R "$LIBEXEC" "$BIN" "$UNIT" "$DBUS" "$POLKIT" 2>/dev/null || true
 
 systemctl daemon-reload
 reload_bus
-systemctl enable --now osreflogd.service
+systemctl enable osreflogd.service
+systemctl restart osreflogd.service
 # The hook goes in last: from here on every dnf transaction is bracketed by checkpoints.
 install -m 0644 "$REPO/data/dnf/osreflog.actions" "$ACTIONS"
 restorecon "$ACTIONS" 2>/dev/null || true

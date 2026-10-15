@@ -74,7 +74,9 @@ pub fn packages(root: &Path, scratch: &Path) -> Result<Vec<Package>, RpmError> {
     Ok(out)
 }
 
-/// dnf5 transactions under `root` that began within `[from_s, to_s]` (Unix seconds).
+/// dnf5 transactions under `root` that had not ended before `from_s` and had begun by `to_s`
+/// (Unix seconds, as dnf records them). Second resolution makes this a superset at the
+/// edges; callers narrow it with the older snapshot's own history when they can.
 ///
 /// # Errors
 /// If the history database can't be copied or read. A root without one yields no
@@ -94,7 +96,7 @@ pub fn transactions(
     let mut stmt = conn.prepare(
         "SELECT t.id, t.dt_begin, t.dt_end, t.user_id, COALESCE(t.description, ''), COALESCE(s.name, '')
          FROM trans t LEFT JOIN trans_state s ON s.id = t.state_id
-         WHERE t.dt_begin BETWEEN ?1 AND ?2 ORDER BY t.id",
+         WHERE (t.dt_end IS NULL OR t.dt_end >= ?1) AND t.dt_begin <= ?2 ORDER BY t.id",
     )?;
     let rows = stmt.query_map([from_s, to_s], |r| {
         Ok(Transaction {
