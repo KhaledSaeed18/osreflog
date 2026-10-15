@@ -160,6 +160,8 @@ fn model_change(c: osreflog_btrfs::Change) -> Change {
         kind: kind.as_str().to_owned(),
         what,
         bytes: c.bytes,
+        cause: None,
+        witness: None,
     }
 }
 
@@ -663,5 +665,7 @@ fn report(from: Endpoint, to: Endpoint, iv: Interval, cached: bool, all: bool) -
         transactions: iv.transactions,
         changes,
         hidden,
+        coverage: osreflog_model::Coverage::default(),
+        gaps: Vec::new(),
     }
 }
