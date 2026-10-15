@@ -705,6 +705,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "osreflog-undo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "osreflog-model",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "osreflog-user"
 version = "0.1.0"
 dependencies = [

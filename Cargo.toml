@@ -16,6 +16,7 @@ osreflog-btrfs = { path = "crates/btrfs" }
 osreflog-rpm = { path = "crates/rpm" }
 osreflog-ledger = { path = "crates/ledger" }
 osreflog-fanotify = { path = "crates/fanotify" }
+osreflog-undo = { path = "crates/undo" }
 
 anyhow = "1"
 aya = "0.14"
