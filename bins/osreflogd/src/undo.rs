@@ -522,6 +522,55 @@ fn run_worker(engine: &Engine, root: &Path, plan: &Plan) -> Result<osreflog_undo
     result
 }
 
+/// The directories the worker may write beneath: the scope directories and the attic,
+/// those that exist.
+fn writable_dirs(r: &Root) -> Vec<std::os::fd::OwnedFd> {
+    plan::SCOPE
+        .iter()
+        .chain(std::iter::once(&ATTIC))
+        .filter_map(|d| r.dir(d.trim_matches('/')).ok())
+        .collect()
+}
+
+/// The write gate's check of the worker's sandbox, as root against a scratch root: after
+/// entering it, a file beneath `etc` can be written, but nothing outside the allowed
+/// directories can be written or read, and nothing can be executed. Exit 0: confined.
+#[must_use]
+pub fn sandbox_selftest(root: &Path) -> i32 {
+    let Ok(r) = Root::open(root) else {
+        return 2;
+    };
+    let writable = writable_dirs(&r);
+    let borrowed: Vec<_> = writable.iter().map(std::os::fd::AsFd::as_fd).collect();
+    if let Err(e) = crate::sandbox::enter_undo(&borrowed) {
+        eprintln!("sandbox: {e}");
+        return 2;
+    }
+    let inside = root.join("etc/.osreflog-selftest");
+    let checks = [
+        ("write beneath etc", std::fs::write(&inside, "x").is_ok()),
+        ("remove it again", std::fs::remove_file(&inside).is_ok()),
+        (
+            "write outside (var/tmp) refused",
+            std::fs::write(root.join("var/tmp/.osreflog-escape"), "x").is_err(),
+        ),
+        (
+            "read outside (usr) refused",
+            std::fs::read(root.join("usr/lib/os-release")).is_err(),
+        ),
+        (
+            "execute refused",
+            Command::new(root.join("usr/bin/true")).status().is_err(),
+        ),
+    ];
+    let mut ok = true;
+    for (what, passed) in checks {
+        println!("{} {what}", if passed { "ok  " } else { "FAIL" });
+        ok &= passed;
+    }
+    i32::from(!ok)
+}
+
 /// The worker: open the root and the directories it may write, enter the sandbox, then read
 /// a plan from stdin and write the report to stdout. Exit 2: the sandbox failed (nothing was
 /// read); 4: the plan didn't parse.
@@ -531,16 +580,7 @@ pub fn worker_main(root: &Path) -> i32 {
         eprintln!("can't open {}", root.display());
         return 2;
     };
-    let mut writable = Vec::new();
-    for dir in plan::SCOPE
-        .iter()
-        .chain(std::iter::once(&ATTIC))
-        .map(|d| d.trim_matches('/'))
-    {
-        if let Ok(fd) = r.dir(dir) {
-            writable.push(fd);
-        }
-    }
+    let writable = writable_dirs(&r);
     let borrowed: Vec<_> = writable.iter().map(std::os::fd::AsFd::as_fd).collect();
     if let Err(e) = crate::sandbox::enter_undo(&borrowed) {
         eprintln!("sandbox: {e}");

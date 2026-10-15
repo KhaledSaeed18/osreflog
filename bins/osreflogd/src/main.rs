@@ -48,6 +48,13 @@ fn main() -> anyhow::Result<()> {
         let root = std::env::args_os().nth(2).unwrap_or_default();
         std::process::exit(osreflogd::undo::worker_main(std::path::Path::new(&root)));
     }
+    // The write gate's check of the undo worker's sandbox (root, against a scratch root).
+    if std::env::args().nth(1).as_deref() == Some("--undo-sandbox-selftest") {
+        let root = std::env::args_os().nth(2).unwrap_or_default();
+        std::process::exit(osreflogd::undo::sandbox_selftest(std::path::Path::new(
+            &root,
+        )));
+    }
     // Test hook: enter the sandbox, then try to read a file. The sandbox must kill us first.
     if std::env::args().nth(1).as_deref() == Some("--sandbox-selftest") {
         if let Err(e) = osreflogd::sandbox::enter() {
