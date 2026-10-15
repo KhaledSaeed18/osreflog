@@ -19,7 +19,7 @@ use osreflog_fanotify::event::{
     FAN_ATTRIB, FAN_CLOSE_WRITE, FAN_CREATE, FAN_DELETE, FAN_RENAME, INFO_DFID_NAME,
     INFO_NEW_DFID_NAME, INFO_OLD_DFID_NAME,
 };
-use osreflog_fanotify::{Fid, Group, MASK, fsid_of, open_by_handle};
+use osreflog_fanotify::{Fid, Group, MASK, open_by_handle};
 use osreflog_model::{Class, LiveChange, LiveStatus, classify as class_of};
 use rustix::event::{PollFd, PollFlags, poll};
 
@@ -100,18 +100,35 @@ fn op_of(mask: u64) -> Option<&'static str> {
 }
 
 /// Resolves directory handles to paths, with a small cache.
+/// Resolves directory handles to logical paths, with a small cache.
+///
+/// The mark is on the whole btrfs filesystem through the top-level mount (a filesystem mark
+/// through a subvolume such as `/` fails with EXDEV), so handles are opened against the
+/// top-level mount and come back as `<top>/<subvolume>/...`. Paths under the tracked
+/// subvolume's prefix become `/...`; everything else (other subvolumes: `home`, the ledger,
+/// snapshots) is out of scope.
 struct Resolver {
-    fsid: [i32; 2],
     mount: File,
+    /// `<top>/<subvolume>`, e.g. `/run/osreflog/top/root`.
+    prefix: String,
     cache: HashMap<(i32, Vec<u8>), String>,
 }
 
 impl Resolver {
-    /// The directory's open fd and path, for a record on the tracked subvolume.
-    fn dir(&mut self, fid: &Fid) -> Option<(OwnedFd, String)> {
-        if fid.fsid != self.fsid {
-            return None;
+    /// The logical path for a path seen through the top-level mount, if it's in scope.
+    fn logical(&self, seen: &str) -> Option<String> {
+        let rest = seen.strip_prefix(&self.prefix)?;
+        if rest.is_empty() {
+            Some("/".to_owned())
+        } else if rest.starts_with('/') {
+            Some(rest.to_owned())
+        } else {
+            None
         }
+    }
+
+    /// The directory's open fd and logical path, for a record on the tracked subvolume.
+    fn dir(&mut self, fid: &Fid) -> Option<(OwnedFd, String)> {
         let fd = open_by_handle(
             self.mount.as_fd(),
             &fid.handle,
@@ -122,11 +139,12 @@ impl Resolver {
         if let Some(p) = self.cache.get(&key) {
             return Some((fd, p.clone()));
         }
-        let path = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd())).ok()?;
-        let path = path.to_str()?.to_owned();
-        if path.ends_with(" (deleted)") || !path.starts_with('/') {
+        let seen = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd())).ok()?;
+        let seen = seen.to_str()?;
+        if seen.ends_with(" (deleted)") {
             return None;
         }
+        let path = self.logical(seen)?;
         if self.cache.len() >= DIR_CACHE_MAX {
             self.cache.clear();
         }
@@ -199,15 +217,12 @@ impl Capture {
             (ev.fid(INFO_DFID_NAME), None)
         };
         let Some(target) = target else { return };
-        if target.fsid != self.resolver.fsid {
-            self.live.stats().out_of_scope += 1;
-            return;
-        }
         if ev.is_dir() && matches!(op, "rename" | "delete") {
             self.resolver.cache.clear();
         }
         let Some((dirfd, path, name)) = self.resolver.full(target) else {
-            self.live.stats().unresolved += 1;
+            // Another subvolume, or a directory that's already gone.
+            self.live.stats().out_of_scope += 1;
             return;
         };
         let from = old.and_then(|o| self.resolver.full(o)).map(|(_, p, _)| p);
@@ -372,28 +387,32 @@ impl Capture {
 pub fn spawn(
     engine: Arc<Engine>,
     live: Arc<LiveState>,
-    root: &Path,
+    top: &Path,
+    subvolume: &str,
     blob_dir: &Path,
 ) -> anyhow::Result<JoinHandle<()>> {
     use anyhow::Context;
     let group = Group::new().context("creating the fanotify group")?;
     group
-        .mark_filesystem(root, MASK)
-        .with_context(|| format!("marking the filesystem of {}", root.display()))?;
-    let fsid = fsid_of(root).context("reading the filesystem id")?;
+        .mark_filesystem(top, MASK)
+        .with_context(|| format!("marking the filesystem through {}", top.display()))?;
     let lineage = Lineage::load()?;
     let mut table = ProcTable::default();
     table.seed();
     let blobs = Blobs::new(blob_dir).context("creating the blob store")?;
     let resolver = Resolver {
-        fsid,
-        mount: File::open(root).context("opening the tracked root")?,
+        mount: File::open(top).context("opening the top-level mount")?,
+        prefix: format!(
+            "{}/{}",
+            top.display().to_string().trim_end_matches('/'),
+            subvolume
+        ),
         cache: HashMap::new(),
     };
     tracing::info!(
         processes = table.len(),
-        "live witness watching {}",
-        root.display()
+        "live witness watching subvolume {subvolume} through {}",
+        top.display()
     );
     live.flushed_ms.store(now_ms(), Ordering::Relaxed);
     live.running.store(true, Ordering::Relaxed);
@@ -420,4 +439,42 @@ pub fn spawn(
 #[must_use]
 pub fn blob_dir(ledger_dir: &Path) -> PathBuf {
     ledger_dir.join("blobs")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_tracked_subvolume_is_in_scope() {
+        let r = Resolver {
+            mount: File::open("/").unwrap(),
+            prefix: "/run/osreflog/top/root".into(),
+            cache: HashMap::new(),
+        };
+        assert_eq!(
+            r.logical("/run/osreflog/top/root/etc/hosts").as_deref(),
+            Some("/etc/hosts")
+        );
+        assert_eq!(r.logical("/run/osreflog/top/root").as_deref(), Some("/"));
+        assert_eq!(
+            r.logical("/run/osreflog/top/rootfs/etc"),
+            None,
+            "a sibling with a longer name"
+        );
+        assert_eq!(r.logical("/run/osreflog/top/home/user/.bashrc"), None);
+        assert_eq!(
+            r.logical("/run/osreflog/top/osreflog/ledger/ledger.sqlite"),
+            None
+        );
+    }
+
+    #[test]
+    fn operations_by_precedence() {
+        assert_eq!(op_of(FAN_CREATE | FAN_CLOSE_WRITE), Some("create"));
+        assert_eq!(op_of(FAN_CLOSE_WRITE | FAN_ATTRIB), Some("modify"));
+        assert_eq!(op_of(FAN_DELETE | FAN_ATTRIB), Some("delete"));
+        assert_eq!(op_of(FAN_RENAME), Some("rename"));
+        assert_eq!(op_of(0), None);
+    }
 }

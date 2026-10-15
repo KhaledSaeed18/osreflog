@@ -56,11 +56,13 @@ fn main() -> anyhow::Result<()> {
         tracing::info!(id = c.id, "boot checkpoint");
     }
 
-    let root = engine.layout().root.clone();
+    let top = engine.layout().top.clone();
+    let subvolume = engine.layout().subvolume.clone();
     let capture = match osreflogd::capture::spawn(
         Arc::clone(&engine),
         Arc::clone(&engine.live),
-        &root,
+        &top,
+        &subvolume,
         &engine.blob_dir(),
     ) {
         Ok(handle) => {
