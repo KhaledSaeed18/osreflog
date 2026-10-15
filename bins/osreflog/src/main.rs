@@ -113,6 +113,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Your own settings changes (dconf/GSettings), newest first, with the app or command
+    /// that made each. Recorded by the `osreflog-user` agent in your own ledger.
+    User {
+        /// Only keys under this path, e.g. /org/gnome/desktop/ or one key.
+        key: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Check the installation.
     Doctor,
     /// Called by the dnf5 actions plugin; never fails the transaction.
@@ -207,6 +217,57 @@ async fn hook(session: bool, phase: &str, pid: u32) {
     }
 }
 
+/// Causes from the user's own ledger whose dconf keys fall under `key`, newest first.
+fn user(key: Option<&str>, limit: u32, json: bool) -> anyhow::Result<ExitCode> {
+    let path =
+        osreflog_ledger::user_ledger_path().context("neither HOME nor XDG_STATE_HOME is set")?;
+    if !path.exists() {
+        println!(
+            "no user ledger at {} yet; start the agent with\n  systemctl --user enable --now osreflog-user",
+            path.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    let ledger = osreflog_ledger::Ledger::open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let prefix = format!("dconf:{}", key.unwrap_or("/"));
+    let mut found: Vec<CauseDetail> = Vec::new();
+    for cause in ledger.causes(100_000, None)? {
+        if found.len() >= limit as usize {
+            break;
+        }
+        let summaries = ledger.summaries(cause.id)?;
+        let changes: Vec<_> = ledger
+            .cause_changes(cause.id)?
+            .into_iter()
+            .filter(|c| c.path.starts_with(&prefix))
+            .map(|mut c| {
+                c.summary = summaries.get(&c.path).cloned().unwrap_or_default();
+                c
+            })
+            .collect();
+        if !changes.is_empty() {
+            found.push(CauseDetail { cause, changes });
+        }
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&found)?);
+    } else if found.is_empty() {
+        println!(
+            "no settings changes recorded{}",
+            key.map(|k| format!(" under {k}")).unwrap_or_default()
+        );
+    } else {
+        for (i, d) in found.iter().enumerate() {
+            if i > 0 {
+                println!();
+            }
+            format::show(d);
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 // One arm per subcommand: long, but flat.
 #[allow(clippy::too_many_lines)]
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
@@ -216,6 +277,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Doctor => doctor::run(cli.session_bus).await,
+        Cmd::User { key, limit, json } => user(key.as_deref(), limit, json),
         command => {
             let p = proxy(cli.session_bus).await?;
             match command {
@@ -317,7 +379,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         format::why(&path, &serde_json::from_str::<Vec<WhyEntry>>(&raw)?);
                     }
                 }
-                Cmd::Hook { .. } | Cmd::Doctor => bail!("unreachable"),
+                Cmd::Hook { .. } | Cmd::Doctor | Cmd::User { .. } => bail!("unreachable"),
             }
             Ok(ExitCode::SUCCESS)
         }

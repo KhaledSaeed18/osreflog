@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+osreflog-ledger.workspace = true
 osreflog-model.workspace = true
 anyhow.workspace = true
 clap.workspace = true
