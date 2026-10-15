@@ -645,6 +645,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "osreflog-boot"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "osreflog-rpm",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "osreflog-btrfs"
 version = "0.1.0"
 dependencies = [

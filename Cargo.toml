@@ -18,6 +18,7 @@ osreflog-ledger = { path = "crates/ledger" }
 osreflog-fanotify = { path = "crates/fanotify" }
 osreflog-undo = { path = "crates/undo" }
 osreflog-bisect = { path = "crates/bisect" }
+osreflog-boot = { path = "crates/boot" }
 
 anyhow = "1"
 aya = "0.14"
