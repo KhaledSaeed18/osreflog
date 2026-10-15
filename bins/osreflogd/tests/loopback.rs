@@ -125,6 +125,10 @@ fn checkpoints_diffs_packages_and_pruning() {
         );
     }
     assert!(
+        !shown.contains(&("modify".to_owned(), "/opt".to_owned())),
+        "the renamed directory's parent only had its times changed"
+    );
+    assert!(
         r.changes
             .iter()
             .all(|c| !matches!(c.class, Class::Package | Class::Noise))

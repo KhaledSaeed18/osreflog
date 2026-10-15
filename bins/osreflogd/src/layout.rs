@@ -125,19 +125,36 @@ pub fn containing_mount<'a>(mounts: &'a [MountEntry], path: &Path) -> Option<&'a
         .max_by_key(|m| Path::new(&m.mount_point).components().count())
 }
 
-/// Whether a mount created at `path` would propagate to other mount namespaces: true when
-/// the mount containing it is in a `shared` peer group. Under systemd's `PrivateMounts=yes`
-/// mounts are slaves (`master:N`), and after `unshare --propagation private` they carry no
-/// tag; in the host's namespace `/run` is `shared`.
+/// Whether a mount created at `path` could propagate to the host's mount namespace.
+///
+/// Fails closed: true when the namespace is PID 1's (if that is readable), or when the mount
+/// containing `path` is `shared` without being a slave (`master:`) of anything, i.e. a peer
+/// of a group the host may belong to. Measured on Fedora 44: in the host namespace `/run` is
+/// `shared:14`; under systemd's `PrivateMounts=yes` it is `shared:936 master:14` (a new peer
+/// group, slave of the host's); after `unshare --propagation private` it has no tag.
 ///
 /// # Errors
 /// If mountinfo can't be read.
 pub fn would_propagate(path: &Path) -> Result<bool, LayoutError> {
+    if let (Ok(own), Ok(init)) = (
+        fs::read_link("/proc/self/ns/mnt"),
+        fs::read_link("/proc/1/ns/mnt"),
+    ) && own == init
+    {
+        return Ok(true);
+    }
     let text =
         fs::read_to_string("/proc/self/mountinfo").map_err(io("reading /proc/self/mountinfo"))?;
     let mounts = parse_mountinfo(&text);
-    Ok(containing_mount(&mounts, path)
-        .is_none_or(|m| m.optional.iter().any(|o| o.starts_with("shared:"))))
+    Ok(containing_mount(&mounts, path).is_none_or(propagates_to_peers_outside))
+}
+
+/// `shared:N` without `master:M`: the mount's peer group may reach other namespaces.
+#[must_use]
+pub fn propagates_to_peers_outside(m: &MountEntry) -> bool {
+    let shared = m.optional.iter().any(|o| o.starts_with("shared:"));
+    let slave = m.optional.iter().any(|o| o.starts_with("master:"));
+    shared && !slave
 }
 
 fn open_dir(path: &Path) -> Result<File, LayoutError> {
@@ -295,6 +312,29 @@ mod tests {
         assert_eq!(m[2].fs_type, "ext4");
         assert_eq!(m[3].mount_point, "/mnt/my disk");
         assert_eq!(m[3].optional, Vec::<String>::new());
+    }
+
+    #[test]
+    fn propagation_rule_matches_measured_tags() {
+        let tags = |t: &str| {
+            parse_mountinfo(&format!("53 43 0:29 / /run rw {t} - tmpfs tmpfs rw\n")).remove(0)
+        };
+        assert!(
+            propagates_to_peers_outside(&tags("shared:14")),
+            "host namespace"
+        );
+        assert!(
+            !propagates_to_peers_outside(&tags("shared:936 master:14")),
+            "PrivateMounts=yes"
+        );
+        assert!(
+            !propagates_to_peers_outside(&tags("master:14")),
+            "slave only"
+        );
+        assert!(
+            !propagates_to_peers_outside(&tags("")),
+            "unshare --propagation private"
+        );
     }
 
     #[test]
