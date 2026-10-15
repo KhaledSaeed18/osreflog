@@ -6,7 +6,8 @@
 #
 # Creates a 1 GiB image in /var/tmp/osreflog-it, mounts its `root` subvolume in a private
 # mount namespace, runs the engine end to end against it, writes the send-stream fixture into
-# crates/btrfs/tests/fixtures, then unmounts and deletes the image.
+# /var/tmp/osreflog-it/fixtures (or, with OSREFLOG_WRITE_FIXTURES=1, into the repo), then
+# unmounts and deletes the image.
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
 if [ -z "${OSREFLOG_IT_NS:-}" ]; then
@@ -19,7 +20,13 @@ BIN=$(find "$REPO/target/debug/deps" -maxdepth 1 -type f -executable -name 'loop
 WORK=/var/tmp/osreflog-it
 RUN=/run/osreflog-it
 IMG=$WORK/btrfs.img
-FIXTURES=$REPO/crates/btrfs/tests/fixtures
+# Fixtures are rewritten only on request (OSREFLOG_WRITE_FIXTURES=1): each run makes new
+# UUIDs and times, and the committed stream should only change on purpose.
+if [ "${OSREFLOG_WRITE_FIXTURES:-0}" = 1 ]; then
+    FIXTURES=$REPO/crates/btrfs/tests/fixtures
+else
+    FIXTURES=$WORK/fixtures
+fi
 
 cleanup() {
     umount -R "$RUN/top" 2>/dev/null || true
@@ -41,5 +48,5 @@ echo "image $IMG on $LOOP, root subvolume at $RUN/root"
 OSREFLOG_LOOPBACK_ROOT=$RUN/root OSREFLOG_LOOPBACK_TOP=$RUN/top OSREFLOG_FIXTURES=$FIXTURES \
     "$BIN" --ignored --test-threads=1 --nocapture
 
-chown -R "${SUDO_UID:-0}:${SUDO_GID:-0}" "$FIXTURES"
+[ "$FIXTURES" = "$WORK/fixtures" ] || chown -R "${SUDO_UID:-0}:${SUDO_GID:-0}" "$FIXTURES"
 echo "loopback integration test passed"
