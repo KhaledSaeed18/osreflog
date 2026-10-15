@@ -277,7 +277,9 @@ impl ChangeSetBuilder {
             parents.insert(String::new());
         };
         for (path, node) in &self.nodes {
-            if node.flags != flags::TIMES || node.origin.is_none() {
+            // Anything but a times-only touch of an object still at its old path is a change
+            // inside the parent (a created or renamed object counts, even with only times).
+            if node.flags != flags::TIMES || node.origin.as_deref() != Some(path.as_str()) {
                 note_parents(path);
             }
         }
@@ -463,6 +465,17 @@ mod tests {
         let cs = changes(&s);
         assert_eq!(summary(&cs), ["modify /etc/hosts"]);
         assert_ne!(cs[0].flags & flags::CONTENT, 0);
+    }
+
+    #[test]
+    fn parent_of_a_renamed_dir_is_not_reported() {
+        // The kernel sends utimes for a renamed directory and for its parent.
+        let s = StreamWriter::new(2)
+            .rename("opt/app", "opt/app2")
+            .path(cmd::UTIMES, "opt")
+            .path(cmd::UTIMES, "opt/app2")
+            .finish();
+        assert_eq!(summary(&changes(&s)), ["rename /opt/app -> /opt/app2"]);
     }
 
     #[test]
