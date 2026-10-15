@@ -1,0 +1,22 @@
+[Unit]
+Description=osreflog: record your settings changes (dconf) and the app that made each
+Documentation=https://github.com/KhaledSaeed18/osreflog
+After=dbus.socket
+Requires=dbus.socket
+
+[Service]
+ExecStart=/usr/local/libexec/osreflog/osreflog-user
+Restart=on-failure
+RestartSec=5
+Nice=5
+# The agent reads /proc of your own processes and runs `dconf`; it needs nothing else.
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=default.target

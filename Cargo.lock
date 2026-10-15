@@ -626,6 +626,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "osreflog-ledger",
  "osreflog-model",
  "serde",
  "serde_json",
@@ -701,6 +702,18 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "osreflog-user"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "osreflog-ledger",
+ "osreflog-model",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]
