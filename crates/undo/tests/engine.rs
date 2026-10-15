@@ -147,7 +147,7 @@ fn created_file_goes_to_the_attic_and_deleted_file_comes_back() {
         step(
             "/etc/deleted.conf",
             State::Absent,
-            Version::file(b"was\n", me(0o600)),
+            Version::file(b"was\n", me(0o640)),
         ),
     ]);
     assert!(out.iter().all(restored), "{out:?}");

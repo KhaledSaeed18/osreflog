@@ -93,6 +93,17 @@ fn label(l: &str) -> (String, String) {
     ("security.selinux".into(), to_hex(&v))
 }
 
+/// An ordinary root-owned config file. (`Meta::default()` would be root with mode 0000,
+/// which the secret rule refuses before any path is resolved.)
+fn plain() -> Meta {
+    Meta {
+        uid: 0,
+        gid: 0,
+        mode: 0o644,
+        xattrs: Vec::new(),
+    }
+}
+
 fn file(content: &str) -> State {
     State::File {
         hash: hash(content.as_bytes()),
@@ -198,7 +209,7 @@ fn a_bind_mount_inside_the_root_is_not_crossed() {
         &Gate::plan(vec![Step {
             path: format!("{dir}/b/x.conf"),
             expect: State::Absent,
-            restore: Version::file(b"x\n", Meta::default()),
+            restore: Version::file(b"x\n", plain()),
         }]),
     );
     rustix::mount::unmount(real.join("b"), rustix::mount::UnmountFlags::DETACH).unwrap();
@@ -230,7 +241,7 @@ fn proc_and_its_magic_links_are_not_followed() {
         &Gate::plan(vec![Step {
             path: format!("{dir}/proc/self/root/etc/osreflog-escape.conf"),
             expect: State::Absent,
-            restore: Version::file(b"x\n", Meta::default()),
+            restore: Version::file(b"x\n", plain()),
         }]),
     );
     // Directly: a root at /proc can't resolve its magic links either.
@@ -292,7 +303,7 @@ fn a_parent_swapped_for_a_symlink_mid_run_never_escapes() {
             &Gate::plan(vec![Step {
                 path: format!("{dir}/d/x{i}.conf"),
                 expect: State::Absent,
-                restore: Version::file(b"x\n", Meta::default()),
+                restore: Version::file(b"x\n", plain()),
             }]),
         );
         match &report.steps[0].outcome {
@@ -334,7 +345,7 @@ fn secrets_capabilities_and_setuid_are_refused_even_as_root() {
         Step {
             path: "/etc/shadow".into(),
             expect: State::Absent,
-            restore: Version::file(b"root::0:0:99999:7:::\n", Meta::default()),
+            restore: Version::file(b"root::0:0:99999:7:::\n", plain()),
         },
         Step {
             path: format!("{dir}/tool"),
