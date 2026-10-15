@@ -51,64 +51,7 @@ pub struct Brackets {
     pub ended: HashSet<u32>,
 }
 
-/// Hides secret values in a command line: `--password=x`, `--token x`, `FOO_TOKEN=x`,
-/// `https://user:pass@host`.
-#[must_use]
-pub fn redact(args: &[String]) -> Vec<String> {
-    const FLAGS: &[&str] = &[
-        "password", "passwd", "pass", "token", "secret", "api-key", "apikey", "key", "auth",
-    ];
-    const NAMES: &[&str] = &["PASS", "TOKEN", "SECRET", "KEY", "AUTH", "CREDENTIAL"];
-    let mut out = Vec::with_capacity(args.len());
-    let mut hide_next = false;
-    for a in args {
-        if hide_next {
-            out.push("***".to_owned());
-            hide_next = false;
-            continue;
-        }
-        let bare = a.trim_start_matches('-');
-        let is_flag = a.starts_with('-') && bare.len() < a.len();
-        if is_flag {
-            let (name, value) = bare
-                .split_once('=')
-                .map_or((bare, None), |(n, v)| (n, Some(v)));
-            if FLAGS.iter().any(|f| name.eq_ignore_ascii_case(f)) {
-                if value.is_some() {
-                    out.push(format!("{}=***", &a[..a.len() - bare.len() + name.len()]));
-                } else {
-                    out.push(a.clone());
-                    hide_next = true;
-                }
-                continue;
-            }
-        }
-        if let Some((name, _)) = a.split_once('=')
-            && !name.is_empty()
-            && !name.starts_with('-')
-            && NAMES.iter().any(|n| name.to_ascii_uppercase().contains(n))
-        {
-            out.push(format!("{name}=***"));
-            continue;
-        }
-        if let Some(scheme_end) = a.find("://")
-            && let Some(at) = a[scheme_end + 3..].find('@')
-        {
-            let userinfo = &a[scheme_end + 3..scheme_end + 3 + at];
-            if let Some((user, _)) = userinfo.split_once(':') {
-                out.push(format!(
-                    "{}{}:***{}",
-                    &a[..scheme_end + 3],
-                    user,
-                    &a[scheme_end + 3 + at..]
-                ));
-                continue;
-            }
-        }
-        out.push(a.clone());
-    }
-    out
-}
+pub use osreflog_model::redact::args as redact;
 
 fn label_of(args: &[String], fallback: &str) -> String {
     let joined = if args.is_empty() {
@@ -511,28 +454,6 @@ mod tests {
         let orphan = p(500, 1, "mystery", &[], "/");
         assert_eq!(classify(&[&orphan], &Brackets::default()).kind, "unknown");
         assert_eq!(classify(&[], &Brackets::default()).kind, "unknown");
-    }
-
-    #[test]
-    fn redaction() {
-        let r = |a: &[&str]| redact(&a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
-        assert_eq!(
-            r(&["nmcli", "--password", "hunter2", "x"]),
-            ["nmcli", "--password", "***", "x"]
-        );
-        assert_eq!(r(&["tool", "--token=abc"]), ["tool", "--token=***"]);
-        assert_eq!(
-            r(&["env", "GITHUB_TOKEN=abc", "PATH=/bin"]),
-            ["env", "GITHUB_TOKEN=***", "PATH=/bin"]
-        );
-        assert_eq!(
-            r(&["curl", "https://me:pw@example.com/x"]),
-            ["curl", "https://me:***@example.com/x"]
-        );
-        assert_eq!(
-            r(&["sed", "-i", "s/a/b/", "/etc/hosts"]),
-            ["sed", "-i", "s/a/b/", "/etc/hosts"]
-        );
     }
 
     #[test]
