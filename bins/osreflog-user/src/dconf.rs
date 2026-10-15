@@ -87,9 +87,15 @@ pub fn apply(cache: &mut Values, path: &str, current: &Values) -> Vec<ValueChang
     out
 }
 
-fn shown(key: &str, value: &str) -> String {
+/// Whether a key's name marks its value as secret: never shown, never stored.
+#[must_use]
+pub fn is_secret_key(key: &str) -> bool {
     let name = key.rsplit('/').next().unwrap_or(key).to_ascii_lowercase();
-    if SECRET_WORDS.iter().any(|w| name.contains(w)) {
+    SECRET_WORDS.iter().any(|w| name.contains(w))
+}
+
+fn shown(key: &str, value: &str) -> String {
+    if is_secret_key(key) {
         return "***".to_owned();
     }
     let one: String = value

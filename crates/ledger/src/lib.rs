@@ -14,7 +14,7 @@ use osreflog_model::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -154,6 +154,21 @@ CREATE TABLE summaries (
     PRIMARY KEY (cause_id, path)
 );
 ";
+
+/// v4 → v5: raw dconf values for the user scope's undo (old and new `GVariant` text per key;
+/// keys named like secrets have no row). Used only in a user's own ledger.
+const SCHEMA_V5: &str = "
+CREATE TABLE dconf_values (
+    cause_id INTEGER NOT NULL REFERENCES causes(id),
+    key TEXT NOT NULL,
+    old TEXT,
+    new TEXT,
+    PRIMARY KEY (cause_id, key)
+);
+";
+
+/// A dconf key with its value before and after a change (`None`: unset).
+pub type DconfValue = (String, Option<String>, Option<String>);
 
 /// An interval as stored or about to be stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -370,6 +385,9 @@ impl Ledger {
         }
         if version < 4 {
             conn.execute_batch(SCHEMA_V4)?;
+        }
+        if version < 5 {
+            conn.execute_batch(SCHEMA_V5)?;
         }
         if version < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -1242,6 +1260,32 @@ impl Ledger {
                 },
             )
             .optional()?)
+    }
+
+    /// Stores a user-scope cause's dconf values: (key, old, new), `None` for unset.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn store_dconf_values(&self, cause_id: i64, values: &[DconfValue]) -> Result<()> {
+        let mut ins = self.conn.prepare(
+            "INSERT OR REPLACE INTO dconf_values (cause_id, key, old, new) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (key, old, new) in values {
+            ins.execute(params![cause_id, key, old, new])?;
+        }
+        Ok(())
+    }
+
+    /// A user-scope cause's dconf values, by key.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn dconf_values(&self, cause_id: i64) -> Result<Vec<DconfValue>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, old, new FROM dconf_values WHERE cause_id = ?1 ORDER BY key")?;
+        let rows = stmt.query_map(params![cause_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Stores the semantic summaries of a cause's changes, by path.

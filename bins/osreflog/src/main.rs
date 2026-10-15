@@ -4,6 +4,7 @@ mod doctor;
 mod format;
 mod textdiff;
 mod time;
+mod user_undo;
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -124,6 +125,9 @@ enum Cmd {
         /// Apply it (admin authentication; a pre-undo checkpoint is taken first).
         #[arg(long)]
         apply: bool,
+        /// A cause from your own settings history (`osreflog user`), undone with dconf as you.
+        #[arg(long)]
+        user: bool,
         #[arg(long)]
         json: bool,
     },
@@ -350,6 +354,18 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         Cmd::Doctor => doctor::run(cli.session_bus).await,
         Cmd::User { key, limit, json } => user(key.as_deref(), limit, json),
+        Cmd::Undo {
+            id,
+            apply,
+            user: true,
+            json,
+        } => user_undo::run(
+            id.trim_start_matches('#')
+                .parse()
+                .context("a cause id, like 12 or #12")?,
+            apply,
+            json,
+        ),
         command => {
             let p = proxy(cli.session_bus).await?;
             match command {
@@ -451,7 +467,9 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         format::why(&path, &serde_json::from_str::<Vec<WhyEntry>>(&raw)?);
                     }
                 }
-                Cmd::Undo { id, apply, json } => {
+                Cmd::Undo {
+                    id, apply, json, ..
+                } => {
                     let id: i64 = id
                         .trim_start_matches('#')
                         .parse()

@@ -201,6 +201,14 @@ fn store(ledger: &mut Ledger, g: &dconf::Group<Who>) -> anyhow::Result<i64> {
         .map(|(_, c)| (path(c), vec![c.summary()]))
         .collect();
     ledger.store_summaries(id, &summaries)?;
+    // Raw values, for `osreflog undo --user`; a secret's value is never kept.
+    let values: Vec<osreflog_ledger::DconfValue> = g
+        .changes
+        .iter()
+        .filter(|(_, c)| !dconf::is_secret_key(&c.key))
+        .map(|(_, c)| (c.key.clone(), c.old.clone(), c.new.clone()))
+        .collect();
+    ledger.store_dconf_values(id, &values)?;
     Ok(id)
 }
 
