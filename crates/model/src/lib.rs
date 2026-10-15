@@ -97,6 +97,16 @@ const NOISE: &[&str] = &[
     "/var/lib/systemd/coredump/",
     "/usr/lib/sysimage/rpm/",
     "/usr/lib/sysimage/libdnf5/",
+    // State rewritten on a timer, not changes anyone makes (P3: rsyslog alone made 19 of 27
+    // causes in a two-minute testbed).
+    "/var/lib/rsyslog/",
+    "/var/lib/upower/",
+    "/var/lib/systemd/timers/",
+    "/var/lib/systemd/timesync/",
+    "/var/lib/chrony/",
+    "/var/lib/logrotate/",
+    "/var/lib/NetworkManager/timestamps",
+    "/var/lib/systemd/random-seed",
 ];
 const CONFIG: &[&str] = &["/etc/", "/opt/", "/usr/local/", "/boot/"];
 const STATE: &[&str] = &["/var/", "/root/", "/srv/"];
@@ -193,6 +203,9 @@ pub struct LiveChange {
     /// BLAKE3 of the content after the change, when captured.
     pub blob: Option<String>,
     pub size: Option<u64>,
+    /// The process that made this change, e.g. `sed (pid 1406613)` (P3 schema v3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
 }
 
 /// A time window in which the live witness may have missed changes.
@@ -389,7 +402,9 @@ mod tests {
         assert_eq!(classify("/usr/bin/bash"), Class::Package);
         assert_eq!(classify("/usr/lib/sysimage/rpm/rpmdb.sqlite"), Class::Noise);
         assert_eq!(classify("/var/log/messages"), Class::Noise);
-        assert_eq!(classify("/var/lib/NetworkManager/timestamps"), Class::State);
+        assert_eq!(classify("/var/lib/NetworkManager/NetworkManager.state"), Class::State);
+        assert_eq!(classify("/var/lib/NetworkManager/timestamps"), Class::Noise);
+        assert_eq!(classify("/var/lib/rsyslog/imjournal.state"), Class::Noise);
         assert_eq!(classify("/variable"), Class::Other);
         assert_eq!(classify("/home"), Class::Other);
     }
