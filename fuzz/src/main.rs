@@ -853,14 +853,35 @@ fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "panic".into())
 }
 
-fn run_one(t: &Target, input: &[u8]) -> (Result<(), String>, Duration) {
-    let started = Instant::now();
+/// CPU time of this thread: wall time would measure the scheduler as much as the parser
+/// (the harness runs at the lowest priority, next to other work).
+fn cpu_now() -> Duration {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
+    Duration::new(
+        u64::try_from(t.tv_sec).unwrap_or(0),
+        u32::try_from(t.tv_nsec).unwrap_or(0),
+    )
+}
+
+fn timed(t: &Target, input: &[u8]) -> (Result<(), String>, Duration) {
+    let started = cpu_now();
     let r = std::panic::catch_unwind(|| (t.check)(input))
         .unwrap_or_else(|p| Err(format!("panic: {}", panic_message(&p))));
-    let took = started.elapsed();
-    match r {
-        Ok(()) if took > SLOW => (Err(format!("slow: {} ms", took.as_millis())), took),
-        r => (r, took),
+    (r, cpu_now().saturating_sub(started))
+}
+
+/// Checks one input; a slow one is run again and counts only if it's slow both times.
+fn run_one(t: &Target, input: &[u8]) -> (Result<(), String>, Duration) {
+    let (r, took) = timed(t, input);
+    if r.is_err() || took <= SLOW {
+        return (r, took);
+    }
+    let (_, again) = timed(t, input);
+    let took = took.min(again);
+    if took > SLOW {
+        (Err(format!("slow: {} ms of CPU", took.as_millis())), took)
+    } else {
+        (Ok(()), took)
     }
 }
 
@@ -920,7 +941,7 @@ fn fuzz(t: &Target, secs: u64, seed: u64, out: &Path) -> std::io::Result<Stats> 
 #[allow(clippy::cast_precision_loss)]
 fn report(name: &str, s: &Stats, elapsed: Duration) {
     println!(
-        "{name}: {:>6} s  {:>11} execs  {:>8.0}/s  slowest {:>4} ms  largest {:>6} B  findings {}",
+        "{name}: {:>6} s  {:>11} execs  {:>8.0}/s  slowest {:>4} ms CPU  largest {:>6} B  findings {}",
         elapsed.as_secs(),
         s.execs,
         s.execs as f64 / elapsed.as_secs_f64().max(0.001),
