@@ -152,7 +152,15 @@ enum Cmd {
         action: bisect::BisectCmd,
     },
     /// Check the installation.
-    Doctor,
+    Doctor {
+        /// Instead: after metal bisect probes, put /boot back and remove clones nothing waits
+        /// for (as root; this also runs at every boot).
+        #[arg(long)]
+        boot: bool,
+        /// With --boot: only say what would be removed.
+        #[arg(long, requires = "boot")]
+        dry_run: bool,
+    },
     /// Called by the dnf5 actions plugin; never fails the transaction.
     #[command(hide = true)]
     Hook { phase: String, pid: u32 },
@@ -362,7 +370,11 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             hook(cli.session_bus, &phase, pid).await;
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Doctor => doctor::run(cli.session_bus).await,
+        Cmd::Doctor {
+            boot: true,
+            dry_run,
+        } => doctor::boot(dry_run),
+        Cmd::Doctor { .. } => doctor::run(cli.session_bus).await,
         Cmd::User { key, limit, json } => user(key.as_deref(), limit, json),
         Cmd::Undo {
             id,
@@ -487,7 +499,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     return undo(&p, id, apply, json).await;
                 }
                 Cmd::Bisect { action } => return bisect::run(&p, action).await,
-                Cmd::Hook { .. } | Cmd::Doctor | Cmd::User { .. } => bail!("unreachable"),
+                Cmd::Hook { .. } | Cmd::Doctor { .. } | Cmd::User { .. } => bail!("unreachable"),
             }
             Ok(ExitCode::SUCCESS)
         }

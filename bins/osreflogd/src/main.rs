@@ -48,6 +48,11 @@ fn main() -> anyhow::Result<()> {
         let spec = std::env::args().nth(2).unwrap_or_default();
         std::process::exit(osreflogd::runner::runner_main(&spec));
     }
+    // After every boot of the default: /boot back as it was, probe clones nobody waits for gone.
+    if std::env::args().nth(1).as_deref() == Some(osreflogd::bootdoctor::FLAG) {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(osreflogd::bootdoctor::main(&rest));
+    }
     // The undo worker: same executable, its own sandbox, the root to write beneath.
     if std::env::args().nth(1).as_deref() == Some(osreflogd::undo::WORKER_FLAG) {
         let root = std::env::args_os().nth(2).unwrap_or_default();

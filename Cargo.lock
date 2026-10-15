@@ -764,6 +764,7 @@ dependencies = [
  "futures-util",
  "libc",
  "osreflog-bisect",
+ "osreflog-boot",
  "osreflog-btrfs",
  "osreflog-fanotify",
  "osreflog-ledger",

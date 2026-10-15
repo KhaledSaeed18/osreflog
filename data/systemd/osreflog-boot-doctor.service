@@ -1,0 +1,38 @@
+[Unit]
+Description=osreflog: clean up after metal bisect probes and check the default boot entry
+Documentation=https://github.com/KhaledSaeed18/osreflog
+# Only on the default system: inside a probe, the probe's own files are what's under test.
+ConditionKernelCommandLine=!osreflog.probe
+After=local-fs.target
+Before=osreflogd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/osreflog/osreflogd --boot-doctor
+# The btrfs top level is mounted under /run/osreflog-boot-doctor in this namespace only.
+PrivateMounts=yes
+RuntimeDirectory=osreflog-boot-doctor
+RuntimeDirectoryMode=0700
+# Writes only /boot (the probe entry, /boot/osreflog, grubenv through grub2-editenv) and
+# deletes probe subvolumes through the private top-level mount.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/boot
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
