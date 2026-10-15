@@ -14,7 +14,7 @@ use osreflog_model::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -139,6 +139,9 @@ CREATE TABLE attribution (
 );
 CREATE INDEX attribution_by_interval ON attribution (interval_id, path);
 ";
+
+/// v2 → v3: which process made each live change.
+const SCHEMA_V3: &str = "ALTER TABLE live_changes ADD COLUMN actor TEXT;";
 
 /// An interval as stored or about to be stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,6 +338,9 @@ impl Ledger {
         }
         if version < 2 {
             conn.execute_batch(SCHEMA_V2)?;
+        }
+        if version < 3 {
+            conn.execute_batch(SCHEMA_V3)?;
         }
         if version < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -967,7 +973,7 @@ impl Ledger {
         let id = tx.last_insert_rowid();
         {
             let mut ins = tx.prepare(
-                "INSERT INTO live_changes (cause_id, ts_ms, path, op, from_path, kind, blob, size) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO live_changes (cause_id, ts_ms, path, op, from_path, kind, blob, size, actor) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for c in changes {
                 ins.execute(params![
@@ -978,7 +984,8 @@ impl Ledger {
                     c.from,
                     c.kind,
                     c.blob,
-                    c.size.map(i64_of)
+                    c.size.map(i64_of),
+                    c.actor
                 ])?;
             }
         }
@@ -1058,6 +1065,7 @@ impl Ledger {
             kind: r.get(at + 4)?,
             blob: r.get(at + 5)?,
             size: size.map(u64_of),
+            actor: r.get(at + 7)?,
         })
     }
 
@@ -1067,7 +1075,7 @@ impl Ledger {
     /// On SQLite errors.
     pub fn cause_changes(&self, id: i64) -> Result<Vec<LiveChange>> {
         let mut stmt = self.conn.prepare(
-            "SELECT ts_ms, path, op, from_path, kind, blob, size FROM live_changes WHERE cause_id = ?1 ORDER BY rowid",
+            "SELECT ts_ms, path, op, from_path, kind, blob, size, actor FROM live_changes WHERE cause_id = ?1 ORDER BY rowid",
         )?;
         let rows = stmt.query_map([id], |r| Self::row_to_live(r, 0))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -1079,7 +1087,7 @@ impl Ledger {
     /// On SQLite errors.
     pub fn live_changes_between(&self, from_ms: i64, to_ms: i64) -> Result<Vec<(i64, LiveChange)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size FROM live_changes
+            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size, actor FROM live_changes
              WHERE ts_ms BETWEEN ?1 AND ?2 ORDER BY ts_ms, rowid",
         )?;
         let rows = stmt.query_map([from_ms, to_ms], |r| {
@@ -1108,7 +1116,7 @@ impl Ledger {
     /// On SQLite errors.
     pub fn history(&self, path: &str, limit: usize) -> Result<Vec<(Cause, LiveChange)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size FROM live_changes
+            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size, actor FROM live_changes
              WHERE path = ?1 OR from_path = ?1 ORDER BY ts_ms DESC, rowid DESC LIMIT ?2",
         )?;
         let rows: Vec<(i64, LiveChange)> = stmt
@@ -1436,6 +1444,7 @@ mod tests {
             kind: "file".into(),
             blob: blob.map(Into::into),
             size: Some(3),
+            actor: None,
         }
     }
 
