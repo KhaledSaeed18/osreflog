@@ -13,6 +13,7 @@
 | 3 | [capture.md](./capture.md) | Live witness: fanotify + eBPF lineage, scopes, cause rules, user scope, gaps |
 | 4 | [bisect.md](./bisect.md) | Test contract, checkpoint → cause bisect, nspawn / vm / metal tiers |
 | 5 | [undo.md](./undo.md) | 3-way undo per object type, what undo never does |
+| 5a | [recovery.md](./recovery.md) | Back to your normal system after a metal probe: GRUB menu, the boot doctor, by hand |
 | 6 | [threat-model.md](./threat-model.md) | Assets, adversaries, secrets handling, mitigations, operating rules |
 | 7 | [roadmap.md](./roadmap.md) | Phases P0–P8, the write gate and the boot gate |
 | 8 | [environment.md](./environment.md) | This host's facts and expected friction |

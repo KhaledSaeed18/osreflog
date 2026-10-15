@@ -67,7 +67,7 @@ Probe count: ⌈log₂(checkpoints)⌉ + ⌈log₂(causes in interval)⌉, versu
 5. The clone is prepared first (P7 G3): its fstab mounts the probe at `/` and a throwaway snapshot of `home` at `/home`; osreflogd and the user agent don't start (`ConditionKernelCommandLine=!osreflog.probe`); the dnf hook is removed. After the probe boots, a oneshot unit records the boot in the clone, and a login message and desktop notification say "osreflog bisect probe N: run your check, then `sudo osreflog bisect good|bad|skip`". The verdict is a file in the clone too: probes never mount the ledger, and the daemon reads both files once the default has booted again.
 6. Rebooting returns to the default entry; the daemon deletes the probe entry and clone and continues the bisect.
 
-The boot gate ([roadmap](./roadmap.md)) must pass before step 3 is ever run on real hardware.
+The boot gate ([roadmap](./roadmap.md)) must pass before step 3 is ever run on real hardware. Getting back by hand: [recovery.md](./recovery.md).
 
 ## What a bisect result looks like
 

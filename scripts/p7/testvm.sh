@@ -239,6 +239,11 @@ qemu() {
         -nic none "$@"
 }
 
+# One command to QEMU's human monitor.
+hmp() {
+    python3 -I -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.argv[2].encode() + b"\n"); time.sleep(0.5)' "$MON" "$1"
+}
+
 # Boots the image headless until the serial log has a line matching $1 (or qemu exits, or
 # TESTVM_TIMEOUT passes), prints the TESTVM lines, and powers the VM off. Sets REPORT (not
 # LINES: bash resets that to the terminal height after external commands).
@@ -251,7 +256,17 @@ boot_until() {
     # shellcheck disable=SC2064
     trap "kill $pid 2>/dev/null" EXIT                 # never leave the VM running behind us
     echo "booting (pid $pid, serial log $LOG)…"
+    # A probe that hangs on purpose (G5) prints RESET-ME; it gets what a person would do, a
+    # hard reset (the power button), a few seconds later.
+    local resets=0 asked
     until grep -aqE "$1" "$LOG" 2>/dev/null; do
+        asked=$(grep -ac 'TESTVM RESET-ME' "$LOG" 2>/dev/null || true)
+        if [ "${asked:-0}" -gt "$resets" ]; then
+            sleep 5
+            hmp system_reset
+            resets=$((resets + 1))
+            echo "  (the VM hung on purpose: hard reset $resets after $((SECONDS - t0)) s)"
+        fi
         kill -0 "$pid" 2>/dev/null || { tail -40 "$LOG"; die "qemu exited before the VM reported"; }
         [ $((SECONDS - t0)) -lt "$timeout" ] || { tail -40 "$LOG"; kill "$pid"; die "no report in $timeout s"; }
         sleep 2
@@ -260,7 +275,7 @@ boot_until() {
     # Console control sequences can come before a line's text: match anywhere, not at ^.
     REPORT=$(tr -d '\r' <"$LOG" | grep -ao 'TESTVM.*' || true)
     sed 's/^TESTVM /  /' <<<"$REPORT"
-    python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(b"system_powerdown\n")' "$MON"
+    hmp system_powerdown
     for _ in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     if kill -0 "$pid" 2>/dev/null; then echo "  (no clean poweroff in 60 s: stopped)"; kill "$pid"; fi
     wait "$pid" 2>/dev/null || true
