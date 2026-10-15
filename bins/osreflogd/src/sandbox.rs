@@ -9,6 +9,8 @@
 //! 5. a seccomp filter that kills the process on any system call outside a short allowlist
 //!
 //! What's left: read stdin, write stdout, allocate memory, exit.
+//!
+//! The undo worker gets a looser sandbox ([`enter_undo`]): it has to write files.
 
 use std::io;
 
@@ -66,9 +68,17 @@ fn landlock_abi() -> io::Result<i64> {
     Ok(i64::from(i32::try_from(v).unwrap_or(0)))
 }
 
-fn landlock() -> io::Result<i64> {
-    let abi = landlock_abi()?;
-    // Filesystem rights per ABI: v1 13 bits, v2 +REFER, v3 +TRUNCATE, v5 +IOCTL_DEV.
+#[repr(C, packed)]
+struct PathBeneathAttr {
+    allowed_access: u64,
+    parent_fd: i32,
+}
+
+const LANDLOCK_RULE_PATH_BENEATH: libc::c_uint = 1;
+
+/// Every filesystem right this kernel's Landlock knows: v1 13 bits, v2 +REFER, v3 +TRUNCATE,
+/// v5 +`IOCTL_DEV`.
+fn fs_rights(abi: i64) -> u64 {
     let mut fs: u64 = (1 << 13) - 1;
     if abi >= 2 {
         fs |= 1 << 13;
@@ -79,6 +89,15 @@ fn landlock() -> io::Result<i64> {
     if abi >= 5 {
         fs |= 1 << 15;
     }
+    fs
+}
+
+/// Restricts this process to the given directories (every filesystem right beneath each),
+/// with every other filesystem and network right handled and denied.
+fn landlock(beneath: &[std::os::fd::BorrowedFd<'_>]) -> io::Result<i64> {
+    use std::os::fd::AsRawFd as _;
+    let abi = landlock_abi()?;
+    let fs = fs_rights(abi);
     let attr = RulesetAttr {
         handled_access_fs: fs,
         handled_access_net: if abi >= 4 { 0b11 } else { 0 },
@@ -99,8 +118,30 @@ fn landlock() -> io::Result<i64> {
         )
     })?;
     let fd = i32::try_from(fd).map_err(|_| io::Error::other("bad ruleset fd"))?;
-    // SAFETY: `fd` is the ruleset we just created; no rules are added, so nothing is allowed.
-    let restricted = check(unsafe { libc::syscall(libc::SYS_landlock_restrict_self, fd, 0u32) });
+    let mut result = Ok(());
+    for dir in beneath {
+        let rule = PathBeneathAttr {
+            allowed_access: fs,
+            parent_fd: dir.as_raw_fd(),
+        };
+        // SAFETY: `rule` is a valid packed `landlock_path_beneath_attr`; `fd` is our ruleset.
+        if let Err(e) = check(unsafe {
+            libc::syscall(
+                libc::SYS_landlock_add_rule,
+                fd,
+                LANDLOCK_RULE_PATH_BENEATH,
+                &raw const rule,
+                0u32,
+            )
+        }) {
+            result = Err(e);
+            break;
+        }
+    }
+    let restricted = result.and_then(|()| {
+        // SAFETY: `fd` is the ruleset we just built.
+        check(unsafe { libc::syscall(libc::SYS_landlock_restrict_self, fd, 0u32) }).map(|_| ())
+    });
     // SAFETY: closing the fd we own.
     unsafe { libc::close(fd) };
     restricted?;
@@ -210,7 +251,44 @@ pub fn enter() -> io::Result<i64> {
         },
     )?;
     set_no_new_privs(true)?;
-    let abi = landlock()?;
+    let abi = landlock(&[])?;
     seccomp()?;
     Ok(abi)
+}
+
+/// Enters the undo worker's sandbox: limits, only `CAP_CHOWN`, `CAP_FOWNER` and
+/// `CAP_DAC_OVERRIDE` (owner, mode, labels and files root can't otherwise write), no new
+/// privileges, and Landlock access only beneath `writable` (the scope directories and the
+/// attic, opened by the caller). No seccomp filter: the engine needs the whole `*at` family.
+///
+/// # Errors
+/// If any step can't be applied.
+pub fn enter_undo(writable: &[std::os::fd::BorrowedFd<'_>]) -> io::Result<i64> {
+    for (resource, value) in [
+        (libc::RLIMIT_AS, 1u64 << 30),
+        (libc::RLIMIT_CPU, 60),
+        (libc::RLIMIT_NPROC, 0),
+        (libc::RLIMIT_NOFILE, 64),
+        (libc::RLIMIT_CORE, 0),
+    ] {
+        let lim = libc::rlimit {
+            rlim_cur: value,
+            rlim_max: value,
+        };
+        // SAFETY: plain syscall with a valid, initialized struct.
+        if unsafe { libc::setrlimit(resource, &raw const lim) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    let keep = CapabilitySet::CHOWN | CapabilitySet::FOWNER | CapabilitySet::DAC_OVERRIDE;
+    set_capabilities(
+        None,
+        CapabilitySets {
+            effective: keep,
+            permitted: keep,
+            inheritable: CapabilitySet::empty(),
+        },
+    )?;
+    set_no_new_privs(true)?;
+    landlock(writable)
 }

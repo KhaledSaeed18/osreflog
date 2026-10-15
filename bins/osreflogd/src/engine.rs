@@ -242,6 +242,11 @@ impl Engine {
         &self.layout
     }
 
+    /// The ledger, locked (for modules of this crate that read it directly).
+    pub(crate) fn ledger(&self) -> MutexGuard<'_, Ledger> {
+        lock(&self.ledger)
+    }
+
     /// Takes a read-only snapshot of the tracked subvolume and records it.
     ///
     /// # Errors

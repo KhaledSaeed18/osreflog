@@ -1217,6 +1217,33 @@ impl Ledger {
             .optional()?)
     }
 
+    /// The newest dnf transaction that overlaps `from_s..=to_s` (seconds), from any computed
+    /// interval.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn transaction_near(&self, from_s: i64, to_s: i64) -> Result<Option<Transaction>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, begin_s, end_s, user_id, description, state FROM transactions
+                 WHERE begin_s <= ?2 AND COALESCE(end_s, begin_s) >= ?1
+                 ORDER BY id DESC LIMIT 1",
+                params![from_s, to_s],
+                |r| {
+                    Ok(Transaction {
+                        id: r.get(0)?,
+                        begin: r.get(1)?,
+                        end: r.get(2)?,
+                        user_id: r.get(3)?,
+                        description: r.get(4)?,
+                        state: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     /// Stores the semantic summaries of a cause's changes, by path.
     ///
     /// # Errors

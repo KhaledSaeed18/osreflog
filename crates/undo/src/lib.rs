@@ -7,6 +7,8 @@
 
 pub mod apply;
 pub mod plan;
+pub mod preview;
 
 pub use apply::{Outcome, Report, Root, StepReport, apply, current};
 pub use plan::{Meta, Plan, State, Step, Version};
+pub use preview::{Applied, Delegation, Preview, PreviewStep, Skipped, Verdict};

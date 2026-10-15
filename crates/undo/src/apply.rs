@@ -154,16 +154,27 @@ impl Root {
     }
 
     /// Opens a directory beneath the root, creating missing components (mode `0700`).
+    /// Opens a directory beneath the root, creating it and its missing parents (`0700`).
+    /// An existing directory is opened in one `openat2` call, so a sandboxed worker only
+    /// needs access to the directory itself, not to the ones above it.
     fn make_dirs(&self, rel: &str) -> io::Result<OwnedFd> {
-        let mut fd = self.dir(".")?;
-        for c in rel.split('/').filter(|c| !c.is_empty()) {
-            match mkdirat(&fd, c, Mode::from_raw_mode(0o700)) {
-                Ok(()) | Err(Errno::EXIST) => {}
-                Err(e) => return Err(e.into()),
-            }
-            fd = openat2(&fd, c, dir_flags(), Mode::empty(), RESOLVE)?;
+        match self.dir(rel) {
+            Err(e) if e.raw_os_error() == Some(Errno::NOENT.raw_os_error()) => {}
+            r => return r,
         }
-        Ok(fd)
+        let (parent, name) = match rel.rsplit_once('/') {
+            Some((p, n)) => (Some(p), n),
+            None => (None, rel),
+        };
+        let parent = match parent {
+            Some(p) => self.make_dirs(p)?,
+            None => rustix::io::fcntl_dupfd_cloexec(&self.fd, 0)?,
+        };
+        match mkdirat(&parent, name, Mode::from_raw_mode(0o700)) {
+            Ok(()) | Err(Errno::EXIST) => {}
+            Err(e) => return Err(e.into()),
+        }
+        Ok(openat2(&parent, name, dir_flags(), Mode::empty(), RESOLVE)?)
     }
 }
 

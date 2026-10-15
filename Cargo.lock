@@ -745,6 +745,7 @@ dependencies = [
  "osreflog-model",
  "osreflog-rpm",
  "osreflog-semantic",
+ "osreflog-undo",
  "rusqlite",
  "rustix",
  "serde",

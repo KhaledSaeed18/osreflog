@@ -28,6 +28,7 @@ const MAX_CHANGES_PER_CAUSE: usize = 20_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Key {
+    Undo(u32),
     Package(u32),
     Unit(String),
     Command(u32),
@@ -49,6 +50,8 @@ pub struct Classified {
 pub struct Brackets {
     pub active: HashMap<u32, String>,
     pub ended: HashSet<u32>,
+    /// Running undo workers: pid → the cause they revert.
+    pub undo: HashMap<u32, i64>,
 }
 
 pub use osreflog_model::redact::args as redact;
@@ -118,6 +121,17 @@ pub fn classify(chain: &[&Proc], brackets: &Brackets) -> Classified {
             actor: Actor::default(),
         };
     };
+    if let Some((pid, of)) = chain
+        .iter()
+        .find_map(|p| brackets.undo.get(&p.pid).map(|of| (p.pid, *of)))
+    {
+        return Classified {
+            key: Key::Undo(pid),
+            kind: "undo",
+            label: format!("undo of #{of}"),
+            actor: actor_of(actor, redact(&actor.args)),
+        };
+    }
     if let Some(pm) = chain
         .iter()
         .find(|p| brackets.active.contains_key(&p.pid) || brackets.ended.contains(&p.pid))
@@ -438,6 +452,30 @@ mod tests {
         let c = classify(&[&ldconfig, &rpm_script, &dnf], &b);
         assert_eq!((c.kind, c.key.clone()), ("dnf", Key::Package(300)));
         assert_eq!(c.label, "dnf install -y figlet");
+    }
+
+    #[test]
+    fn an_undo_workers_writes_are_an_undo_cause() {
+        let daemon = p(
+            10,
+            1,
+            "osreflogd",
+            &["osreflogd"],
+            "/system.slice/osreflogd.service",
+        );
+        let worker = p(
+            11,
+            10,
+            "osreflogd",
+            &["osreflogd", "--undo-worker", "/run/osreflog/top/root"],
+            "/system.slice/osreflogd.service",
+        );
+        let mut b = Brackets::default();
+        assert_eq!(classify(&[&worker, &daemon], &b).kind, "unit");
+        b.undo.insert(11, 42);
+        let c = classify(&[&worker, &daemon], &b);
+        assert_eq!((c.kind, c.key.clone()), ("undo", Key::Undo(11)));
+        assert_eq!(c.label, "undo of #42");
     }
 
     #[test]

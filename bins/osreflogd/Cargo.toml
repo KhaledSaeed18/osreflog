@@ -15,6 +15,7 @@ osreflog-ledger.workspace = true
 osreflog-model.workspace = true
 osreflog-rpm.workspace = true
 osreflog-semantic = { path = "../../crates/semantic" }
+osreflog-undo.workspace = true
 anyhow.workspace = true
 aya.workspace = true
 blake3.workspace = true
