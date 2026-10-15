@@ -912,18 +912,21 @@ impl Engine {
         } else {
             &change.path
         };
-        let (blob, target, checkpoints) = {
+        let (blob, target, gone, checkpoints) = {
             let l = lock(&self.ledger);
             (
                 l.previous_blob(original, change.ts_ms)?,
                 l.previous_target(original, change.ts_ms)?,
+                l.last_gone(original, change.ts_ms)?,
                 l.checkpoints()?,
             )
         };
+        // A snapshot taken before the path last went away holds an earlier file.
         let snapshot = checkpoints
             .iter()
             .rev()
             .find(|c| c.pruned_ms.is_none() && c.created_ms < started_ms)
+            .filter(|c| gone.is_none_or(|g| c.created_ms > g))
             .map(|c| {
                 self.layout
                     .snapshot_path(&c.name)

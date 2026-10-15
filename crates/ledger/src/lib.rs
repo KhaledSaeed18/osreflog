@@ -1154,31 +1154,51 @@ impl Ledger {
         Ok(out)
     }
 
-    /// The newest content blob recorded for `path` before `ts_ms`.
+    /// The last time before `ts_ms` that `path` went away: deleted or renamed, itself or a
+    /// directory above it. Content recorded before that belongs to an earlier file.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn last_gone(&self, path: &str, ts_ms: i64) -> Result<Option<i64>> {
+        Ok(self.conn.query_row(
+            "SELECT MAX(ts_ms) FROM live_changes WHERE ts_ms < ?2 AND (
+                (op = 'delete' AND (path = ?1 OR substr(?1, 1, length(path) + 1) = path || '/'))
+                OR (op = 'rename' AND from_path IS NOT NULL
+                    AND (from_path = ?1 OR substr(?1, 1, length(from_path) + 1) = from_path || '/')))",
+            params![path, ts_ms],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The newest content blob recorded for `path` before `ts_ms`, and since it last went
+    /// away (see [`Self::last_gone`]).
     ///
     /// # Errors
     /// On SQLite errors.
     pub fn previous_blob(&self, path: &str, ts_ms: i64) -> Result<Option<String>> {
+        let since = self.last_gone(path, ts_ms)?.unwrap_or(i64::MIN);
         Ok(self
             .conn
             .query_row(
-                "SELECT blob FROM live_changes WHERE path = ?1 AND ts_ms < ?2 AND blob IS NOT NULL ORDER BY ts_ms DESC, rowid DESC LIMIT 1",
-                params![path, ts_ms],
+                "SELECT blob FROM live_changes WHERE path = ?1 AND ts_ms < ?2 AND ts_ms > ?3 AND blob IS NOT NULL ORDER BY ts_ms DESC, rowid DESC LIMIT 1",
+                params![path, ts_ms, since],
                 |r| r.get(0),
             )
             .optional()?)
     }
 
-    /// The newest symlink target recorded for `path` before `ts_ms`.
+    /// The newest symlink target recorded for `path` before `ts_ms`, and since it last went
+    /// away.
     ///
     /// # Errors
     /// On SQLite errors.
     pub fn previous_target(&self, path: &str, ts_ms: i64) -> Result<Option<String>> {
+        let since = self.last_gone(path, ts_ms)?.unwrap_or(i64::MIN);
         Ok(self
             .conn
             .query_row(
-                "SELECT target FROM live_changes WHERE path = ?1 AND ts_ms < ?2 AND target IS NOT NULL ORDER BY ts_ms DESC, rowid DESC LIMIT 1",
-                params![path, ts_ms],
+                "SELECT target FROM live_changes WHERE path = ?1 AND ts_ms < ?2 AND ts_ms > ?3 AND target IS NOT NULL ORDER BY ts_ms DESC, rowid DESC LIMIT 1",
+                params![path, ts_ms, since],
                 |r| r.get(0),
             )
             .optional()?)
@@ -1528,6 +1548,66 @@ mod tests {
             target: None,
             summary: Vec::new(),
         }
+    }
+
+    #[test]
+    fn previous_content_stops_where_the_path_went_away() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        let gone = |path: &str, ts_ms: i64, op: &str, from: Option<&str>| LiveChange {
+            op: op.into(),
+            from: from.map(Into::into),
+            blob: None,
+            ..live(path, ts_ms, None)
+        };
+        let d = "/etc/x.service.d";
+        l.store_cause(
+            &cause("first run", 100),
+            &[
+                live("/etc/x.service.d/a.conf", 100, Some("old")),
+                live("/etc/b.conf", 100, Some("b1")),
+                live("/etc/c.conf", 100, Some("c1")),
+            ],
+        )
+        .unwrap();
+        l.store_cause(
+            &cause("revert", 200),
+            &[
+                gone(d, 200, "delete", None),
+                gone("/etc/b.conf", 200, "delete", None),
+                gone("/etc/c2.conf", 200, "rename", Some("/etc/c.conf")),
+            ],
+        )
+        .unwrap();
+        // A directory above it was removed: the file in the second run is new.
+        assert_eq!(
+            l.last_gone("/etc/x.service.d/a.conf", 300).unwrap(),
+            Some(200)
+        );
+        assert_eq!(
+            l.previous_blob("/etc/x.service.d/a.conf", 300).unwrap(),
+            None
+        );
+        assert_eq!(l.previous_blob("/etc/b.conf", 300).unwrap(), None);
+        assert_eq!(
+            l.previous_blob("/etc/c.conf", 300).unwrap(),
+            None,
+            "renamed away"
+        );
+        // Before it went away, the old content still counts; a sibling prefix doesn't match.
+        assert_eq!(
+            l.previous_blob("/etc/b.conf", 150).unwrap().as_deref(),
+            Some("b1")
+        );
+        assert_eq!(l.last_gone("/etc/x.service.dd/a.conf", 300).unwrap(), None);
+        l.store_cause(
+            &cause("second run", 300),
+            &[live("/etc/b.conf", 300, Some("b2"))],
+        )
+        .unwrap();
+        assert_eq!(
+            l.previous_blob("/etc/b.conf", 400).unwrap().as_deref(),
+            Some("b2")
+        );
     }
 
     #[test]
