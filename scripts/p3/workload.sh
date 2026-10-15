@@ -29,6 +29,8 @@ revert() {
     hostnamectl set-hostname --pretty "$ORIG_PRETTY"
     [ -n "$ORIG_PROFILE" ] && tuned-adm profile "$ORIG_PROFILE"
     firewall-cmd --permanent --delete-zone=osreflogwl >/dev/null 2>&1
+    # firewalld keeps a backup of a deleted zone (osreflog found this on the first run).
+    rm -f /etc/firewalld/zones/osreflogwl.xml.old
     nmcli connection delete osreflog-workload >/dev/null 2>&1
     getent passwd osreflogwl >/dev/null && userdel osreflogwl
     getent group osreflogwlg >/dev/null && groupdel osreflogwlg
