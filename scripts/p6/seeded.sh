@@ -21,7 +21,7 @@ cause_of() { osreflog why "$1" -n 1 --json | python3 -I -c 'import json,sys; e=j
 
 cleanup() {
     systemctl unmask "$UNIT" >/dev/null 2>&1
-    rm -f "/etc/systemd/system/$UNIT" "/usr/local/lib/systemd/system/$UNIT" /etc/sysctl.d/90-osreflog-seed.conf /etc/modprobe.d/osreflog-seed.conf
+    rm -f "/etc/systemd/system/$UNIT" "/usr/local/lib/systemd/system/$UNIT" /etc/sysctl.d/90-osreflog-seed.conf /etc/modprobe.d/zz-osreflog-seed.conf
     systemctl daemon-reload
     rm -rf "$DIR"
     rpm -q figlet >/dev/null 2>&1 && dnf remove -y -q figlet >/dev/null 2>&1
@@ -139,15 +139,16 @@ scenario_package() {
 
 scenario_module() {
     echo; echo "== module: a kernel module option (vm: only a booted kernel reads it)"
-    # numdummies=3 makes dummy0..dummy2 (the default is one); the parameter isn't in sysfs.
+    # numdummies=3 makes dummy0..dummy2; the parameter isn't in sysfs. "zz-": systemd's own
+    # /usr/lib/modprobe.d/systemd.conf sets numdummies=0, and the last file read wins.
     mkdir -p "$DIR"
     local good; good=$(checkpoint "seed module: good")
     printf 'm1\n' >"$DIR/m1"; settle
-    printf 'options dummy numdummies=3\n' >/etc/modprobe.d/osreflog-seed.conf; settle
-    local culprit; culprit=$(cause_of /etc/modprobe.d/osreflog-seed.conf)
+    printf 'options dummy numdummies=3\n' >/etc/modprobe.d/zz-osreflog-seed.conf; settle
+    local culprit; culprit=$(cause_of /etc/modprobe.d/zz-osreflog-seed.conf)
     printf 'm2\n' >"$DIR/m2"; settle
     local bad; bad=$(checkpoint "seed module: bad")
-    bisect module vm "$culprit" "$good" "$bad" "modprobe -v dummy; cat /etc/modprobe.d/osreflog-seed.conf; ls /sys/class/net; ! test -e /sys/class/net/dummy2"
+    bisect module vm "$culprit" "$good" "$bad" "modprobe -v dummy; ls /sys/class/net; ! test -e /sys/class/net/dummy2"
 }
 
 pgrep -x osreflogd >/dev/null || { echo "osreflogd isn't running" >&2; exit 1; }
