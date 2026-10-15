@@ -3,6 +3,8 @@ Description=osreflog: system change history
 Documentation=https://github.com/KhaledSaeed18/osreflog
 After=local-fs.target dbus.service
 Requires=dbus.service
+# Never inside a metal bisect probe: it would record into the real history (P7).
+ConditionKernelCommandLine=!osreflog.probe
 
 [Service]
 Type=dbus

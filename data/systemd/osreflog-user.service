@@ -3,6 +3,8 @@ Description=osreflog: record your settings changes (dconf) and the app that made
 Documentation=https://github.com/KhaledSaeed18/osreflog
 After=dbus.socket
 Requires=dbus.socket
+# Never inside a metal bisect probe: it would record into the real history (P7).
+ConditionKernelCommandLine=!osreflog.probe
 
 [Service]
 ExecStart=/usr/local/libexec/osreflog/osreflog-user

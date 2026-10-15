@@ -19,6 +19,7 @@
 pub mod bls;
 pub mod grubenv;
 pub mod kernel;
+pub mod probe;
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
