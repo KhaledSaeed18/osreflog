@@ -15,10 +15,14 @@ osreflog-model = { path = "crates/model" }
 osreflog-btrfs = { path = "crates/btrfs" }
 osreflog-rpm = { path = "crates/rpm" }
 osreflog-ledger = { path = "crates/ledger" }
+osreflog-fanotify = { path = "crates/fanotify" }
 
 anyhow = "1"
+aya = "0.14"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+libc = "0.2"
 rustix = { version = "1", features = ["fs", "mount", "pipe", "process", "thread"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
