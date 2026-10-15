@@ -8,13 +8,13 @@ pub mod retention;
 use std::path::Path;
 
 use osreflog_model::{
-    Change, Checkpoint, Class, ClassCounts, IntervalSummary, PackageChange, Transaction,
-    VerifyReport,
+    Actor, Cause, CauseRef, Change, Checkpoint, Class, ClassCounts, Gap, IntervalSummary,
+    LiveChange, PackageChange, Transaction, VerifyReport,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -101,6 +101,45 @@ CREATE TABLE chain (
 );
 ";
 
+/// v1 → v2 (P3): what the live witness saw.
+const SCHEMA_V2: &str = "
+CREATE TABLE causes (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    started_ms INTEGER NOT NULL,
+    ended_ms INTEGER NOT NULL,
+    package_paths INTEGER NOT NULL
+);
+CREATE INDEX causes_by_time ON causes (started_ms);
+CREATE TABLE live_changes (
+    cause_id INTEGER NOT NULL REFERENCES causes(id),
+    ts_ms INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    op TEXT NOT NULL,
+    from_path TEXT,
+    kind TEXT NOT NULL,
+    blob TEXT,
+    size INTEGER
+);
+CREATE INDEX live_by_path ON live_changes (path, ts_ms);
+CREATE INDEX live_by_time ON live_changes (ts_ms);
+CREATE TABLE gaps (
+    id INTEGER PRIMARY KEY,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    reason TEXT NOT NULL
+);
+CREATE TABLE attribution (
+    interval_id INTEGER NOT NULL REFERENCES intervals(id),
+    path TEXT NOT NULL,
+    cause_id INTEGER REFERENCES causes(id),
+    witness TEXT NOT NULL
+);
+CREATE INDEX attribution_by_interval ON attribution (interval_id, path);
+";
+
 /// An interval as stored or about to be stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
@@ -167,7 +206,18 @@ fn digest<T: Serialize>(value: &T) -> Result<String> {
 }
 
 impl IntervalRecord {
+    /// Attribution (cause, witness) is not part of the interval's record: it's chained on its
+    /// own (`attribution`), so intervals stored before P3 still verify.
     fn of(iv: &Interval) -> Result<Self> {
+        let changes: Vec<Change> = iv
+            .changes
+            .iter()
+            .map(|c| Change {
+                cause: None,
+                witness: None,
+                ..c.clone()
+            })
+            .collect();
         Ok(Self {
             from_id: iv.from_id,
             to_id: iv.to_id,
@@ -176,12 +226,48 @@ impl IntervalRecord {
             stream_bytes: iv.stream_bytes,
             commands: iv.commands,
             changed_bytes: iv.changed_bytes,
-            changes: digest(&iv.changes)?,
+            changes: digest(&changes)?,
             packages: digest(&iv.packages)?,
             transactions: digest(&iv.transactions)?,
         })
     }
 }
+
+#[derive(Serialize)]
+struct CauseRecord<'a> {
+    id: i64,
+    kind: &'a str,
+    label: &'a str,
+    actor: &'a Actor,
+    started_ms: i64,
+    ended_ms: i64,
+    package_paths: u64,
+    changes: String,
+}
+
+impl<'a> CauseRecord<'a> {
+    fn of(c: &'a Cause, changes: &[LiveChange]) -> Result<Self> {
+        Ok(Self {
+            id: c.id,
+            kind: &c.kind,
+            label: &c.label,
+            actor: &c.actor,
+            started_ms: c.started_ms,
+            ended_ms: c.ended_ms,
+            package_paths: c.package_paths,
+            changes: digest(&changes)?,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct AttributionRecord {
+    interval_id: i64,
+    rows: String,
+}
+
+/// One change's attribution within an interval: its path, its cause (if any), its witness.
+pub type Attribution = (String, Option<i64>, String);
 
 #[derive(Serialize, serde::Deserialize, PartialEq, Eq)]
 struct PruneRecord {
@@ -246,6 +332,11 @@ impl Ledger {
         }
         if version == 0 {
             conn.execute_batch(SCHEMA)?;
+        }
+        if version < 2 {
+            conn.execute_batch(SCHEMA_V2)?;
+        }
+        if version < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -563,9 +654,20 @@ impl Ledger {
                         .map(str::to_owned)
                         .collect(),
                     bytes: u64_of(r.get(6)?),
+                    cause: None,
+                    witness: None,
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
+        let attribution = self.attribution_of(id)?;
+        if !attribution.is_empty() {
+            for c in &mut iv.changes {
+                if let Some((cause, witness)) = attribution.get(&c.path) {
+                    c.cause.clone_from(cause);
+                    c.witness = Some(witness.clone());
+                }
+            }
+        }
         let mut stmt = self.conn.prepare(
             "SELECT name, arch, action, from_evr, to_evr FROM packages WHERE interval_id = ?1 ORDER BY rowid",
         )?;
@@ -774,6 +876,21 @@ impl Ledger {
                     Err(LedgerError::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => None,
                     Err(e) => return Err(e),
                 },
+                "cause" => match self.cause(*ref_id)? {
+                    Some(c) => Some(serde_json::to_string(&CauseRecord::of(
+                        &c,
+                        &self.cause_changes(*ref_id)?,
+                    )?)?),
+                    None => None,
+                },
+                "gap" => self
+                    .gap(*ref_id)?
+                    .map(|g| serde_json::to_string(&g))
+                    .transpose()?,
+                "attribution" => Some(serde_json::to_string(&AttributionRecord {
+                    interval_id: *ref_id,
+                    rows: digest(&self.attribution_rows(*ref_id)?)?,
+                })?),
                 "prune" => {
                     let r: PruneRecord = serde_json::from_str(record)?;
                     last_prune.insert(r.id, r.ms);
@@ -813,6 +930,337 @@ impl Ledger {
             first_bad: None,
             detail: None,
         })
+    }
+
+    /// The id of the stored interval between two checkpoints.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn interval_id(&self, from_id: i64, to_id: i64) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM intervals WHERE from_id = ?1 AND to_id = ?2",
+                [from_id, to_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Stores a closed cause and its changes; returns its id.
+    ///
+    /// # Errors
+    /// On SQLite or encoding errors.
+    pub fn store_cause(&mut self, cause: &Cause, changes: &[LiveChange]) -> Result<i64> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO causes (kind, label, actor, started_ms, ended_ms, package_paths) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                cause.kind,
+                cause.label,
+                serde_json::to_string(&cause.actor)?,
+                cause.started_ms,
+                cause.ended_ms,
+                i64_of(cause.package_paths)
+            ],
+        )?;
+        let id = tx.last_insert_rowid();
+        {
+            let mut ins = tx.prepare(
+                "INSERT INTO live_changes (cause_id, ts_ms, path, op, from_path, kind, blob, size) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for c in changes {
+                ins.execute(params![
+                    id,
+                    c.ts_ms,
+                    c.path,
+                    c.op,
+                    c.from,
+                    c.kind,
+                    c.blob,
+                    c.size.map(i64_of)
+                ])?;
+            }
+        }
+        let stored = Cause {
+            id,
+            changes: changes.len() as u64,
+            ..cause.clone()
+        };
+        Self::append_chain(
+            &tx,
+            "cause",
+            id,
+            &serde_json::to_string(&CauseRecord::of(&stored, changes)?)?,
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    fn row_to_cause(r: &rusqlite::Row<'_>) -> rusqlite::Result<Cause> {
+        let actor: String = r.get(3)?;
+        Ok(Cause {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            label: r.get(2)?,
+            actor: serde_json::from_str(&actor).unwrap_or_default(),
+            started_ms: r.get(4)?,
+            ended_ms: r.get(5)?,
+            package_paths: u64_of(r.get(6)?),
+            changes: u64_of(r.get(7)?),
+        })
+    }
+
+    const CAUSE_SELECT: &'static str =
+        "SELECT c.id, c.kind, c.label, c.actor, c.started_ms, c.ended_ms, c.package_paths,
+        (SELECT COUNT(*) FROM live_changes l WHERE l.cause_id = c.id) FROM causes c";
+
+    /// # Errors
+    /// On SQLite errors.
+    pub fn cause(&self, id: i64) -> Result<Option<Cause>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{} WHERE c.id = ?1", Self::CAUSE_SELECT),
+                [id],
+                Self::row_to_cause,
+            )
+            .optional()?)
+    }
+
+    /// Causes newest first, at most `limit`, optionally only those that ended at or after
+    /// `since_ms`.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn causes(&self, limit: usize, since_ms: Option<i64>) -> Result<Vec<Cause>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "{} WHERE c.ended_ms >= ?1 ORDER BY c.started_ms DESC, c.id DESC LIMIT ?2",
+            Self::CAUSE_SELECT
+        ))?;
+        let rows = stmt.query_map(
+            params![
+                since_ms.unwrap_or(i64::MIN),
+                i64::try_from(limit).unwrap_or(i64::MAX)
+            ],
+            Self::row_to_cause,
+        )?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    fn row_to_live(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<LiveChange> {
+        let size: Option<i64> = r.get(at + 6)?;
+        Ok(LiveChange {
+            ts_ms: r.get(at)?,
+            path: r.get(at + 1)?,
+            op: r.get(at + 2)?,
+            from: r.get(at + 3)?,
+            kind: r.get(at + 4)?,
+            blob: r.get(at + 5)?,
+            size: size.map(u64_of),
+        })
+    }
+
+    /// A cause's changes in the order they happened.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn cause_changes(&self, id: i64) -> Result<Vec<LiveChange>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ts_ms, path, op, from_path, kind, blob, size FROM live_changes WHERE cause_id = ?1 ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map([id], |r| Self::row_to_live(r, 0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Live changes in `[from_ms, to_ms]`, with their cause ids, oldest first.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn live_changes_between(&self, from_ms: i64, to_ms: i64) -> Result<Vec<(i64, LiveChange)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size FROM live_changes
+             WHERE ts_ms BETWEEN ?1 AND ?2 ORDER BY ts_ms, rowid",
+        )?;
+        let rows = stmt.query_map([from_ms, to_ms], |r| {
+            Ok((r.get(0)?, Self::row_to_live(r, 1)?))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Causes active in `[from_ms, to_ms]` of a given kind (e.g. `dnf`).
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn causes_between(&self, kind: &str, from_ms: i64, to_ms: i64) -> Result<Vec<Cause>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "{} WHERE c.kind = ?1 AND c.ended_ms >= ?2 AND c.started_ms <= ?3 ORDER BY c.started_ms",
+            Self::CAUSE_SELECT
+        ))?;
+        let rows = stmt.query_map(params![kind, from_ms, to_ms], Self::row_to_cause)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// The newest `limit` live changes to `path` (as its new or old name), newest first, with
+    /// their causes.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn history(&self, path: &str, limit: usize) -> Result<Vec<(Cause, LiveChange)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cause_id, ts_ms, path, op, from_path, kind, blob, size FROM live_changes
+             WHERE path = ?1 OR from_path = ?1 ORDER BY ts_ms DESC, rowid DESC LIMIT ?2",
+        )?;
+        let rows: Vec<(i64, LiveChange)> = stmt
+            .query_map(
+                params![path, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |r| Ok((r.get(0)?, Self::row_to_live(r, 1)?)),
+            )?
+            .collect::<std::result::Result<_, _>>()?;
+        let mut out = Vec::new();
+        for (cause_id, change) in rows {
+            if let Some(c) = self.cause(cause_id)? {
+                out.push((c, change));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The newest content blob recorded for `path` before `ts_ms`.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn previous_blob(&self, path: &str, ts_ms: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT blob FROM live_changes WHERE path = ?1 AND ts_ms < ?2 AND blob IS NOT NULL ORDER BY ts_ms DESC, rowid DESC LIMIT 1",
+                params![path, ts_ms],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Records a window in which the live witness may have missed changes.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn add_gap(&mut self, start_ms: i64, end_ms: i64, reason: &str) -> Result<i64> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO gaps (start_ms, end_ms, reason) VALUES (?1, ?2, ?3)",
+            params![start_ms, end_ms, reason],
+        )?;
+        let id = tx.last_insert_rowid();
+        let gap = Gap {
+            id,
+            start_ms,
+            end_ms,
+            reason: reason.to_owned(),
+        };
+        Self::append_chain(&tx, "gap", id, &serde_json::to_string(&gap)?)?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    fn gap(&self, id: i64) -> Result<Option<Gap>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, start_ms, end_ms, reason FROM gaps WHERE id = ?1",
+                [id],
+                |r| {
+                    Ok(Gap {
+                        id: r.get(0)?,
+                        start_ms: r.get(1)?,
+                        end_ms: r.get(2)?,
+                        reason: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Gaps overlapping `[from_ms, to_ms]`.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn gaps_between(&self, from_ms: i64, to_ms: i64) -> Result<Vec<Gap>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, start_ms, end_ms, reason FROM gaps WHERE end_ms >= ?1 AND start_ms <= ?2 ORDER BY start_ms",
+        )?;
+        let rows = stmt.query_map([from_ms, to_ms], |r| {
+            Ok(Gap {
+                id: r.get(0)?,
+                start_ms: r.get(1)?,
+                end_ms: r.get(2)?,
+                reason: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Stores which cause explains each change of a stored interval.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn store_attribution(&mut self, interval_id: i64, rows: &[Attribution]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM attribution WHERE interval_id = ?1",
+            [interval_id],
+        )?;
+        {
+            let mut ins = tx.prepare("INSERT INTO attribution (interval_id, path, cause_id, witness) VALUES (?1, ?2, ?3, ?4)")?;
+            for (path, cause, witness) in rows {
+                ins.execute(params![interval_id, path, cause, witness])?;
+            }
+        }
+        let mut sorted = rows.to_vec();
+        sorted.sort();
+        let record = AttributionRecord {
+            interval_id,
+            rows: digest(&sorted)?,
+        };
+        Self::append_chain(
+            &tx,
+            "attribution",
+            interval_id,
+            &serde_json::to_string(&record)?,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn attribution_rows(&self, interval_id: i64) -> Result<Vec<Attribution>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path, cause_id, witness FROM attribution WHERE interval_id = ?1 ORDER BY path, cause_id, witness",
+        )?;
+        let rows = stmt.query_map([interval_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    fn attribution_of(
+        &self,
+        interval_id: i64,
+    ) -> Result<std::collections::HashMap<String, (Option<CauseRef>, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.path, a.witness, c.id, c.kind, c.label FROM attribution a
+             LEFT JOIN causes c ON c.id = a.cause_id WHERE a.interval_id = ?1",
+        )?;
+        let rows = stmt.query_map([interval_id], |r| {
+            let id: Option<i64> = r.get(2)?;
+            let cause = match id {
+                Some(id) => Some(CauseRef {
+                    id,
+                    kind: r.get(3)?,
+                    label: r.get(4)?,
+                }),
+                None => None,
+            };
+            Ok((r.get::<_, String>(0)?, (cause, r.get::<_, String>(1)?)))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     /// Direct SQL access for tests that simulate tampering.
@@ -861,6 +1309,8 @@ mod tests {
                     class: Class::Config,
                     what: vec!["content".into()],
                     bytes: 4096,
+                    cause: None,
+                    witness: None,
                 },
                 Change {
                     path: "/var/log/dnf5.log".into(),
@@ -870,6 +1320,8 @@ mod tests {
                     class: Class::Noise,
                     what: vec!["content".into(), "times".into()],
                     bytes: 0,
+                    cause: None,
+                    witness: None,
                 },
             ],
             packages: vec![PackageChange {
@@ -953,6 +1405,140 @@ mod tests {
             .unwrap();
         let v = l.verify().unwrap();
         assert_eq!((v.ok, v.first_bad), (false, Some(1)));
+    }
+
+    fn cause(label: &str, started_ms: i64) -> Cause {
+        Cause {
+            id: 0,
+            kind: "command".into(),
+            label: label.into(),
+            actor: Actor {
+                pid: 42,
+                comm: "sed".into(),
+                exe: "/usr/bin/sed".into(),
+                uid: 0,
+                cgroup: "/user.slice".into(),
+                command: vec!["sudo".into(), "sed".into()],
+            },
+            started_ms,
+            ended_ms: started_ms + 10,
+            changes: 0,
+            package_paths: 0,
+        }
+    }
+
+    fn live(path: &str, ts_ms: i64, blob: Option<&str>) -> LiveChange {
+        LiveChange {
+            ts_ms,
+            path: path.into(),
+            op: "modify".into(),
+            from: None,
+            kind: "file".into(),
+            blob: blob.map(Into::into),
+            size: Some(3),
+        }
+    }
+
+    #[test]
+    fn causes_attribution_and_gaps() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.add_checkpoint(&cp(1, 1000, "pre-dnf")).unwrap();
+        l.add_checkpoint(&cp(2, 2000, "post-dnf")).unwrap();
+        let cid = l
+            .store_cause(
+                &cause("sudo sed -i /etc/hosts", 1500),
+                &[
+                    live("/etc/hosts", 1500, Some("aa")),
+                    live("/etc/hosts", 1600, Some("bb")),
+                ],
+            )
+            .unwrap();
+        let c = l.cause(cid).unwrap().unwrap();
+        assert_eq!((c.changes, c.actor.comm.as_str()), (2, "sed"));
+        assert_eq!(l.causes(10, None).unwrap().len(), 1);
+        assert_eq!(l.live_changes_between(1400, 1700).unwrap().len(), 2);
+        assert_eq!(
+            l.previous_blob("/etc/hosts", 1600).unwrap().as_deref(),
+            Some("aa")
+        );
+        assert_eq!(
+            l.history("/etc/hosts", 5).unwrap()[0].1.blob.as_deref(),
+            Some("bb")
+        );
+
+        let iid = l.store_interval(&interval(1, 2)).unwrap();
+        l.store_attribution(
+            iid,
+            &[
+                ("/etc/hosts".into(), Some(cid), "both".into()),
+                ("/var/log/dnf5.log".into(), None, "state".into()),
+            ],
+        )
+        .unwrap();
+        let back = l.interval(1, 2).unwrap().unwrap();
+        let hosts = back
+            .changes
+            .iter()
+            .find(|c| c.path == "/etc/hosts")
+            .unwrap();
+        assert_eq!(hosts.cause.as_ref().map(|c| c.id), Some(cid));
+        assert_eq!(hosts.witness.as_deref(), Some("both"));
+
+        let g = l.add_gap(1700, 1800, "daemon down").unwrap();
+        assert_eq!(l.gaps_between(1000, 2000).unwrap()[0].id, g);
+        assert!(l.verify().unwrap().ok);
+
+        l.raw()
+            .execute("UPDATE live_changes SET blob = 'cc' WHERE blob = 'bb'", [])
+            .unwrap();
+        assert!(
+            !l.verify().unwrap().ok,
+            "editing a live change breaks its cause record"
+        );
+    }
+
+    #[test]
+    fn verify_detects_attribution_and_gap_edits() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.add_checkpoint(&cp(1, 1000, "manual")).unwrap();
+        l.add_checkpoint(&cp(2, 2000, "manual")).unwrap();
+        let iid = l.store_interval(&interval(1, 2)).unwrap();
+        l.store_attribution(iid, &[("/etc/hosts".into(), None, "state".into())])
+            .unwrap();
+        l.add_gap(1, 2, "overflow").unwrap();
+        assert!(l.verify().unwrap().ok);
+        l.raw()
+            .execute("UPDATE attribution SET witness = 'both'", [])
+            .unwrap();
+        assert!(!l.verify().unwrap().ok);
+        l.raw()
+            .execute("UPDATE attribution SET witness = 'state'", [])
+            .unwrap();
+        assert!(l.verify().unwrap().ok);
+        l.raw()
+            .execute("UPDATE gaps SET reason = 'nothing to see'", [])
+            .unwrap();
+        assert!(!l.verify().unwrap().ok);
+    }
+
+    #[test]
+    fn migrates_a_v1_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(SCHEMA).unwrap();
+            c.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let mut l = Ledger::open(&path).unwrap();
+        l.add_checkpoint(&cp(1, 1, "boot")).unwrap();
+        l.store_cause(&cause("x", 5), &[]).unwrap();
+        let v: i64 = l
+            .raw()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        assert!(l.verify().unwrap().ok);
     }
 
     #[test]
