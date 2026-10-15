@@ -721,7 +721,10 @@ impl Engine {
         )?;
         let mut refs: HashMap<i64, CauseRef> = HashMap::new();
         for c in changes.iter_mut() {
-            if c.class == Class::Noise {
+            // Times-only changes are mostly atime updates, which raise no fanotify event: no
+            // witness could see them, and they aren't changes worth explaining.
+            let times_only = c.op == "modify" && c.what.len() == 1 && c.what[0] == "times";
+            if c.class == Class::Noise || times_only {
                 continue;
             }
             let (cause, witness) = match by_path

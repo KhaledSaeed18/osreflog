@@ -264,6 +264,10 @@ impl Capture {
             kind: if is_dir { "dir" } else { "file" }.to_owned(),
             blob,
             size,
+            actor: self
+                .table
+                .get(pid)
+                .map(|p| format!("{} (pid {pid})", p.comm)),
         };
         self.builder.add(&classified, change, now);
         self.live.stats().recorded += 1;

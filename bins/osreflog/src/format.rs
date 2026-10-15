@@ -314,7 +314,10 @@ pub fn why(path: &str, entries: &[WhyEntry]) {
         }
         println!("{}", live_line(&e.change).trim_start());
         println!("  by #{} {}: {}", e.cause.id, e.cause.kind, e.cause.label);
-        println!("  actor {}", actor_line(&e.cause.actor));
+        match &e.change.actor {
+            Some(actor) => println!("  process {actor}"),
+            None => println!("  actor {}", actor_line(&e.cause.actor)),
+        }
         match (&e.before, &e.after) {
             (Some(before), Some(after)) => {
                 let d = crate::textdiff::unified(before, after, 3);

@@ -406,6 +406,7 @@ mod tests {
             kind: "file".into(),
             blob: None,
             size: None,
+            actor: None,
         }
     }
 
