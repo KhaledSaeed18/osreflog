@@ -25,10 +25,18 @@ const SHELLS: &[&str] = &[
 ];
 const MAX_LABEL: usize = 160;
 const MAX_CHANGES_PER_CAUSE: usize = 20_000;
+/// At most this many causes open at once; changes for new ones beyond it merge into one
+/// `flood` cause per uid (threat model A3).
+const MAX_OPEN: usize = 256;
+/// At most this many changes held across all open causes. Past it, changes are counted out:
+/// the state witness still records them, without a cause.
+const MAX_HELD: usize = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Key {
     Undo(u32),
+    /// Changes from more concurrent causes than the builder keeps open, by uid.
+    Flood(u32),
     Package(u32),
     Unit(String),
     Command(u32),
@@ -196,6 +204,10 @@ pub struct OpenCause {
 #[derive(Debug, Default)]
 pub struct Builder {
     open: HashMap<Key, OpenCause>,
+    /// Changes held across all open causes.
+    held: usize,
+    /// Changes not kept because of [`MAX_HELD`] or [`MAX_CHANGES_PER_CAUSE`].
+    pub dropped: u64,
 }
 
 /// Merges `new` into the change already recorded for the same path in this cause.
@@ -263,6 +275,19 @@ impl Builder {
     /// Records a change for its cause.
     pub fn add(&mut self, c: &Classified, change: LiveChange, now: Instant) {
         let ts = change.ts_ms;
+        let flood;
+        let c = if self.open.len() >= MAX_OPEN && !self.open.contains_key(&c.key) {
+            let uid = c.actor.uid;
+            flood = Classified {
+                key: Key::Flood(uid),
+                kind: "flood",
+                label: format!("more than {MAX_OPEN} causes at once (uid {uid}), merged"),
+                actor: c.actor.clone(),
+            };
+            &flood
+        } else {
+            c
+        };
         let open = self.open.entry(c.key.clone()).or_insert_with(|| OpenCause {
             key: c.key.clone(),
             cause: Cause {
@@ -280,8 +305,13 @@ impl Builder {
         });
         open.last = now;
         open.cause.ended_ms = open.cause.ended_ms.max(ts);
-        if open.changes.len() < MAX_CHANGES_PER_CAUSE {
+        if open.changes.len() < MAX_CHANGES_PER_CAUSE && self.held < MAX_HELD {
+            let before = open.changes.len();
             coalesce(&mut open.changes, change);
+            // Coalescing may also shrink the list (a path created and deleted again).
+            self.held = (self.held + open.changes.len()).saturating_sub(before);
+        } else {
+            self.dropped += 1;
         }
     }
 
@@ -324,15 +354,22 @@ impl Builder {
             })
             .map(|(k, _)| k.clone())
             .collect();
-        ready
+        let closed: Vec<OpenCause> = ready
             .into_iter()
             .filter_map(|k| self.open.remove(&k))
-            .collect()
+            .collect();
+        self.recount();
+        closed
     }
 
     /// Takes every open cause (shutdown).
     pub fn take_all(&mut self) -> Vec<OpenCause> {
+        self.held = 0;
         self.open.drain().map(|(_, c)| c).collect()
+    }
+
+    fn recount(&mut self) {
+        self.held = self.open.values().map(|c| c.changes.len()).sum();
     }
 
     /// The start of the oldest open cause: everything before it has been stored.
@@ -452,6 +489,50 @@ mod tests {
         let c = classify(&[&ldconfig, &rpm_script, &dnf], &b);
         assert_eq!((c.kind, c.key.clone()), ("dnf", Key::Package(300)));
         assert_eq!(c.label, "dnf install -y figlet");
+    }
+
+    #[test]
+    fn a_flood_of_causes_merges_and_stays_bounded() {
+        let mut b = Builder::default();
+        let now = Instant::now();
+        for pid in 0..(u32::try_from(MAX_OPEN).unwrap() + 500) {
+            let proc = p(10_000 + pid, 1, "touch", &["touch"], SESSION);
+            let c = Classified {
+                key: Key::Command(10_000 + pid),
+                kind: "command",
+                label: format!("touch {pid}"),
+                actor: actor_of(&proc, Vec::new()),
+            };
+            b.add(
+                &c,
+                change(&format!("/var/x/{pid}"), "create", i64::from(pid)),
+                now,
+            );
+        }
+        assert_eq!(
+            b.open_count(),
+            MAX_OPEN + 1,
+            "the rest merged into one flood cause"
+        );
+        let flood = b.open.get(&Key::Flood(0)).unwrap();
+        assert_eq!(
+            (flood.cause.kind.as_str(), flood.changes.len()),
+            ("flood", 500)
+        );
+        // The global budget: past it, changes are counted, not held.
+        let proc = p(9, 1, "touch", &["touch"], SESSION);
+        let c = Classified {
+            key: Key::Command(9),
+            kind: "command",
+            label: "touch".into(),
+            actor: actor_of(&proc, Vec::new()),
+        };
+        b.held = MAX_HELD;
+        b.add(&c, change("/var/x/over", "create", 1), now);
+        assert_eq!(b.dropped, 1);
+        let closed = b.take_closed(now + Duration::from_secs(10), &Brackets::default());
+        assert_eq!(closed.len(), MAX_OPEN + 1);
+        assert_eq!(b.held, 0);
     }
 
     #[test]

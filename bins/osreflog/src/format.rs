@@ -76,6 +76,12 @@ pub fn status(s: &Status) {
                 l.delegated
             );
         }
+        if l.dropped > 0 {
+            println!(
+                "           {} changes not attributed (too many at once; snapshots still have them)",
+                l.dropped
+            );
+        }
         if l.overflows > 0 || l.ring_drops > 0 || l.unresolved > 0 {
             println!(
                 "           {} queue overflows, {} lineage drops, {} unresolved",

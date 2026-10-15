@@ -436,6 +436,7 @@ impl Capture {
         let mut s = self.live.stats();
         s.ring_drops = drops;
         s.open_causes = self.builder.open_count() as u64;
+        s.dropped = self.builder.dropped;
         s.processes = self.table.len() as u64;
     }
 

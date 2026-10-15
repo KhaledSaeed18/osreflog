@@ -396,6 +396,10 @@ pub struct LiveStatus {
     /// Causes credited to a D-Bus caller instead of the daemon that wrote (P4).
     #[serde(default)]
     pub delegated: u64,
+    /// Changes not attributed because open causes held too many (threat model A3); the state
+    /// witness still records them.
+    #[serde(default)]
+    pub dropped: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
