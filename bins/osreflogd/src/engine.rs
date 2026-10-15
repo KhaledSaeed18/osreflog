@@ -5,23 +5,30 @@
 //! serializes diffs. A dnf hook therefore never waits for a diff in progress, only for
 //! another snapshot.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use osreflog_btrfs::{Kind, Op, flags, ioctl};
+use osreflog_ledger::Attribution;
 use osreflog_ledger::refs::{self, RefError, Resolved};
 use osreflog_ledger::retention::{self, Policy};
 use osreflog_ledger::{Interval, Ledger, LedgerError};
 use osreflog_model::{
-    Change, Checkpoint, Class, ClassCounts, DiffReport, Endpoint, LogEntry, PackageChange, Status,
-    Transaction, VerifyReport, classify, reason,
+    Cause, CauseDetail, CauseRef, Change, Checkpoint, Class, ClassCounts, Coverage, DiffReport,
+    Endpoint, Gap, LiveChange, LogEntry, PackageChange, Status, Transaction, VerifyReport,
+    WhyEntry, classify, reason,
 };
 use osreflog_rpm::Package;
 
+use crate::blobs::{Blobs, read_text};
+use crate::capture::LiveState;
 use crate::layout::Layout;
 
 const RPMDB_PREFIX: &str = "/usr/lib/sysimage/rpm/";
@@ -181,6 +188,8 @@ pub struct Engine {
     snap_lock: Mutex<()>,
     compute_lock: Mutex<()>,
     pub policy: Policy,
+    /// The live witness's shared state (brackets, flush progress, counters).
+    pub live: Arc<LiveState>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -221,6 +230,7 @@ impl Engine {
             snap_lock: Mutex::new(()),
             compute_lock: Mutex::new(()),
             policy: Policy::default(),
+            live: Arc::new(LiveState::default()),
         })
     }
 
@@ -345,7 +355,7 @@ impl Engine {
             .finish()
             .map_err(io("btrfs send"))?;
 
-        let changes: Vec<Change> = diff.changes.into_iter().map(model_change).collect();
+        let mut changes: Vec<Change> = diff.changes.into_iter().map(model_change).collect();
         let rpm_changed = changes.iter().any(|c| c.path.starts_with(RPMDB_PREFIX));
         let history_changed = changes.iter().any(|c| c.path.starts_with(HISTORY_PREFIX));
 
@@ -368,6 +378,8 @@ impl Engine {
         } else {
             Vec::new()
         };
+
+        self.attribute(&mut changes, from.created_ms, to.created_ms)?;
 
         Ok(Interval {
             from_id: from.id,
@@ -458,7 +470,7 @@ impl Engine {
                 iv.packages.len(),
                 iv.duration_ms
             );
-            lock(&self.ledger).store_interval(&iv)?;
+            self.store_interval(&iv)?;
         }
         self.prune_locked()?;
         Ok(pending.len())
@@ -537,11 +549,19 @@ impl Engine {
                     }
                     let _compute = lock(&self.compute_lock);
                     let iv = self.compute_between(&from, &to)?;
-                    lock(&self.ledger).store_interval(&iv)?;
+                    self.store_interval(&iv)?;
                     (iv, false)
                 };
+                let gaps = lock(&self.ledger).gaps_between(from.created_ms, to.created_ms)?;
                 let from_ep = Endpoint::Checkpoint(from);
-                return Ok(report(from_ep, Endpoint::Checkpoint(to), iv, cached, all));
+                return Ok(report(
+                    from_ep,
+                    Endpoint::Checkpoint(to),
+                    iv,
+                    cached,
+                    all,
+                    gaps,
+                ));
             }
             Resolved::Live => {
                 if from.pruned_ms.is_some() {
@@ -581,12 +601,18 @@ impl Engine {
                 (result?, Endpoint::Live { taken_ms: taken }, false)
             }
         };
+        let to_ms = match &to_endpoint {
+            Endpoint::Live { taken_ms } => *taken_ms,
+            Endpoint::Checkpoint(c) => c.created_ms,
+        };
+        let gaps = lock(&self.ledger).gaps_between(from.created_ms, to_ms)?;
         Ok(report(
             Endpoint::Checkpoint(from),
             to_endpoint,
             interval,
             cached,
             all,
+            gaps,
         ))
     }
 
@@ -622,6 +648,13 @@ impl Engine {
             latest: all.last().cloned(),
             chain_entries: l.chain_len()?,
             pending_diffs: l.pending_intervals()?.len() as u64,
+            live: self.live.running.load(Ordering::Relaxed).then(|| {
+                self.live
+                    .stats
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone()
+            }),
         })
     }
 
@@ -630,7 +663,228 @@ impl Engine {
     pub fn verify(&self) -> Result<VerifyReport> {
         Ok(lock(&self.ledger).verify()?)
     }
+
+    /// Where the live witness keeps file contents (inside the ledger subvolume).
+    #[must_use]
+    pub fn blob_dir(&self) -> PathBuf {
+        self.layout.base().join("ledger").join("blobs")
+    }
+
+    fn store_interval(&self, iv: &Interval) -> Result<i64> {
+        let mut l = lock(&self.ledger);
+        let id = l.store_interval(iv)?;
+        let rows: Vec<Attribution> = iv
+            .changes
+            .iter()
+            .filter_map(|c| {
+                c.witness
+                    .as_ref()
+                    .map(|w| (c.path.clone(), c.cause.as_ref().map(|r| r.id), w.clone()))
+            })
+            .collect();
+        if !rows.is_empty() {
+            l.store_attribution(id, &rows)?;
+        }
+        Ok(id)
+    }
+
+    /// Fills in which cause the live witness saw making each change, when it watched the whole
+    /// interval: `both` for a live match on the path, `bracket` for package-owned paths inside
+    /// a package transaction, `state` for changes it didn't see. Noise stays unattributed.
+    fn attribute(&self, changes: &mut [Change], from_ms: i64, to_ms: i64) -> Result<()> {
+        let since = lock(&self.ledger)
+            .meta("live_since")?
+            .and_then(|v| v.parse::<i64>().ok());
+        if since.is_none_or(|s| s > from_ms) {
+            return Ok(());
+        }
+        if !self.live.wait_flushed(to_ms, FLUSH_WAIT) {
+            tracing::warn!(
+                to_ms,
+                "the live witness didn't flush in time; attribution may be incomplete"
+            );
+        }
+        let l = lock(&self.ledger);
+        let live =
+            l.live_changes_between(from_ms - ATTRIBUTION_SLACK_MS, to_ms + ATTRIBUTION_SLACK_MS)?;
+        let mut by_path: HashMap<&str, i64> = HashMap::new();
+        for (cause, c) in &live {
+            by_path.insert(c.path.as_str(), *cause);
+            if let Some(from) = &c.from {
+                by_path.entry(from.as_str()).or_insert(*cause);
+            }
+        }
+        let dnf = l.causes_between(
+            "dnf",
+            from_ms - ATTRIBUTION_SLACK_MS,
+            to_ms + ATTRIBUTION_SLACK_MS,
+        )?;
+        let mut refs: HashMap<i64, CauseRef> = HashMap::new();
+        for c in changes.iter_mut() {
+            if c.class == Class::Noise {
+                continue;
+            }
+            let (cause, witness) = match by_path
+                .get(c.path.as_str())
+                .or_else(|| c.from.as_deref().and_then(|f| by_path.get(f)))
+            {
+                Some(id) => (Some(*id), "both"),
+                None if c.class == Class::Package && !dnf.is_empty() => {
+                    (Some(dnf[0].id), "bracket")
+                }
+                None => (None, "state"),
+            };
+            if let Some(id) = cause
+                && !refs.contains_key(&id)
+                && let Some(full) = l.cause(id)?
+            {
+                refs.insert(
+                    id,
+                    CauseRef {
+                        id,
+                        kind: full.kind,
+                        label: full.label,
+                    },
+                );
+            }
+            c.cause = cause.and_then(|id| refs.get(&id).cloned());
+            c.witness = Some(witness.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Stores a cause the live witness closed.
+    ///
+    /// # Errors
+    /// On ledger errors.
+    pub fn store_cause(&self, cause: &Cause, changes: &[LiveChange]) -> Result<i64> {
+        Ok(lock(&self.ledger).store_cause(cause, changes)?)
+    }
+
+    /// Records a window the live witness may have missed.
+    ///
+    /// # Errors
+    /// On ledger errors.
+    pub fn add_gap(&self, start_ms: i64, end_ms: i64, reason: &str) -> Result<i64> {
+        tracing::warn!(start_ms, end_ms, "live witness gap: {reason}");
+        Ok(lock(&self.ledger).add_gap(start_ms, end_ms, reason)?)
+    }
+
+    /// Notes that the live witness is alive (each minute), so downtime becomes a gap.
+    pub fn heartbeat(&self) {
+        let _ = lock(&self.ledger).set_meta("alive_ms", &now_ms().to_string());
+    }
+
+    /// Called when the live witness starts: records the time it was down as a gap, and when
+    /// it first started watching (attribution only applies to intervals after that).
+    ///
+    /// # Errors
+    /// On ledger errors.
+    pub fn live_started(&self) -> Result<()> {
+        let now = now_ms();
+        let (alive, stopped, since) = {
+            let l = lock(&self.ledger);
+            let get = |k: &str| l.meta(k).map(|v| v.and_then(|v| v.parse::<i64>().ok()));
+            (get("alive_ms")?, get("stopped_ms")?, get("live_since")?)
+        };
+        if since.is_none() {
+            lock(&self.ledger).set_meta("live_since", &now.to_string())?;
+        } else {
+            let last = alive.into_iter().chain(stopped).max().unwrap_or(now);
+            let reason = if stopped.is_some_and(|s| Some(s) >= alive) {
+                "osreflogd was stopped"
+            } else {
+                "osreflogd was not running (crash or power loss)"
+            };
+            self.add_gap(last, now, reason)?;
+        }
+        lock(&self.ledger).set_meta("stopped_ms", "")?;
+        self.heartbeat();
+        Ok(())
+    }
+
+    /// Called on a clean shutdown.
+    pub fn live_stopped(&self) {
+        let _ = lock(&self.ledger).set_meta("stopped_ms", &now_ms().to_string());
+    }
+
+    /// The newest causes.
+    ///
+    /// # Errors
+    /// On ledger errors.
+    pub fn causes(&self, limit: usize) -> Result<Vec<Cause>> {
+        Ok(lock(&self.ledger).causes(limit, None)?)
+    }
+
+    /// One cause with all its changes.
+    ///
+    /// # Errors
+    /// If there is no such cause, or on ledger errors.
+    pub fn cause_detail(&self, id: i64) -> Result<CauseDetail> {
+        let l = lock(&self.ledger);
+        let cause = l
+            .cause(id)?
+            .ok_or_else(|| EngineError::Invalid(format!("no cause #{id}")))?;
+        Ok(CauseDetail {
+            changes: l.cause_changes(id)?,
+            cause,
+        })
+    }
+
+    /// Why `path` changed: its newest live changes with their causes and, where known, the
+    /// content before and after.
+    ///
+    /// # Errors
+    /// On ledger errors.
+    pub fn why(&self, path: &str, limit: usize) -> Result<Vec<WhyEntry>> {
+        let blobs = Blobs::new(&self.blob_dir()).map_err(io("opening the blob store"))?;
+        let (history, checkpoints) = {
+            let l = lock(&self.ledger);
+            (l.history(path, limit)?, l.checkpoints()?)
+        };
+        let text = |hash: &Option<String>| {
+            hash.as_deref()
+                .and_then(|h| blobs.read(h))
+                .and_then(|b| String::from_utf8(b).ok())
+        };
+        let mut out = Vec::new();
+        for (cause, change) in history {
+            let after = if change.op == "delete" {
+                None
+            } else {
+                text(&change.blob)
+            };
+            let previous = lock(&self.ledger).previous_blob(&change.path, change.ts_ms)?;
+            let before = match previous {
+                Some(h) => text(&Some(h)),
+                None => checkpoints
+                    .iter()
+                    .rev()
+                    .find(|c| c.pruned_ms.is_none() && c.created_ms < cause.started_ms)
+                    .and_then(|c| {
+                        let original = change.from.as_deref().unwrap_or(&change.path);
+                        let file = self
+                            .layout
+                            .snapshot_path(&c.name)
+                            .join(original.trim_start_matches('/'));
+                        read_text(&file, original)
+                    }),
+            };
+            out.push(WhyEntry {
+                cause,
+                change,
+                before,
+                after,
+            });
+        }
+        Ok(out)
+    }
 }
+
+/// How long attribution waits for the live witness to store causes up to an interval's end.
+const FLUSH_WAIT: Duration = Duration::from_secs(10);
+/// Clock slack between checkpoint times and live event times.
+const ATTRIBUTION_SLACK_MS: i64 = 2000;
 
 /// Package-owned and noise paths are hidden by default, and so are files whose only change is
 /// their times (mostly `relatime` access-time updates on files that were read or run).
@@ -639,10 +893,28 @@ fn shown_by_default(c: &Change) -> bool {
     !matches!(c.class, Class::Package | Class::Noise) && !times_only
 }
 
-fn report(from: Endpoint, to: Endpoint, iv: Interval, cached: bool, all: bool) -> DiffReport {
+fn report(
+    from: Endpoint,
+    to: Endpoint,
+    iv: Interval,
+    cached: bool,
+    all: bool,
+    gaps: Vec<Gap>,
+) -> DiffReport {
     let mut counts = ClassCounts::default();
+    let mut coverage = Coverage::default();
+    let mut live = false;
     for c in &iv.changes {
         counts.add(c.class);
+        if c.witness.is_some() && c.class != Class::Noise {
+            live = true;
+            coverage.all += 1;
+            coverage.all_attributed += u64::from(c.cause.is_some());
+            if c.class == Class::Config {
+                coverage.config += 1;
+                coverage.config_attributed += u64::from(c.cause.is_some());
+            }
+        }
     }
     let total = iv.changes.len() as u64;
     let changes: Vec<Change> = iv
@@ -654,7 +926,11 @@ fn report(from: Endpoint, to: Endpoint, iv: Interval, cached: bool, all: bool) -
     DiffReport {
         from,
         to,
-        witnesses: vec!["state".to_owned()],
+        witnesses: if live {
+            vec!["state".to_owned(), "live".to_owned()]
+        } else {
+            vec!["state".to_owned()]
+        },
         cached,
         compute_ms: u64::try_from(iv.duration_ms).unwrap_or(0),
         stream_bytes: iv.stream_bytes,
@@ -665,7 +941,7 @@ fn report(from: Endpoint, to: Endpoint, iv: Interval, cached: bool, all: bool) -
         transactions: iv.transactions,
         changes,
         hidden,
-        coverage: osreflog_model::Coverage::default(),
-        gaps: Vec::new(),
+        coverage,
+        gaps,
     }
 }
