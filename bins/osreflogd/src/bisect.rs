@@ -159,7 +159,15 @@ impl Session<'_> {
         let out = Command::new("systemd-run")
             .args(["--wait", "--pipe", "--collect", "--quiet"])
             .arg(format!("--unit=osreflog-{}", p.name))
-            .args(["-p", "PrivateMounts=yes", "-p", "Nice=10"])
+            // Delegate: nspawn --keep-unit makes sub-cgroups for the container.
+            .args([
+                "-p",
+                "PrivateMounts=yes",
+                "-p",
+                "Delegate=yes",
+                "-p",
+                "Nice=10",
+            ])
             .arg("-p")
             .arg(format!("MemoryMax={}M", mem_mib + 1024))
             .arg("-p")
