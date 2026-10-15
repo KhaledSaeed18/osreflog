@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate in progress** (G1, G2 done)
+- Status: **boot gate in progress** (G1–G3 done)
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -96,3 +96,24 @@ Findings:
 - **The probe's fstab says `subvol=root` and nothing failed.** `systemd-remount-fs` remounted `/` with the options of the subvolume actually mounted (`subvol=/osreflog/probes/p1`). The fstab rewrite in G3 is still needed for the ledger and for honesty, but a stale `/` line doesn't break the boot.
 - **osreflogd failed to start in the probe** (the only failed unit), as predicted: the probe has the daemon enabled. G3 masks it in the clone.
 - The host side reported FAIL although the VM printed DONE: the report was kept in `$LINES`, which bash (checkwinsize) resets to the terminal's height after an external command. Renamed; the VM-side results above are from the serial log.
+
+### 2026-10-15: G3, the probe's own root
+
+`osreflog_boot::probe::prepare` turns a clone into probe N (22 tests in the crate):
+- **fstab**: `/` on `osreflog/probes/pN`, `/home` on `osreflog/probes/pN-home`, a writable snapshot of the home subvolume, when `/home` is a subvolume of the same btrfs (otherwise reported: `InRoot`, or `Real` for another filesystem, which a probe would mount for real). Each changed line keeps the original as a `# was:` comment, so preparing twice, or preparing a clone of a probe, starts from the system's own lines.
+- **Kept out**: osreflogd and the user agent get a drop-in with `ConditionKernelCommandLine=!osreflog.probe`, and the shipped units now carry the same condition (a hand-booted clone can't record into the real history either). The dnf actions hook is removed from the clone.
+- **`osreflog-metal-probe.service`** (`ConditionKernelCommandLine=osreflog.probe=N`) writes `/var/lib/osreflog-probe/booted`; the daemon reads it from the clone after the reboot, which tells "the probe booted" from "it fell back to the default". A record from an earlier probe of the same state is removed first.
+- **What the user sees**: `/etc/motd.d/osreflog-probe` and an autostart notification: this boot is probe N, a throwaway copy (its /home too); verdict with `sudo osreflog bisect good|bad|skip`; reboot to return.
+- **Writes beneath the clone only**: `openat2` with `RESOLVE_BENEATH | NO_SYMLINKS | NO_MAGICLINKS | NO_XDEV`, one component at a time, files replaced through a temporary name. A test points `/etc/motd.d` in the clone at a directory outside it: refused, nothing written there. (P6's `prepare` for nspawn/VM probes writes with plain paths; worth the same treatment.)
+
+**Design change: probes don't mount the ledger.** bisect.md had every probe mount the ledger subvolume at `/var/lib/osreflog` for the verdict. A probe is a state under suspicion; giving it the real history read-write isn't needed. The verdict comes back as the boot record does: a file in the clone, read once the default has booted again.
+
+`scripts/p7/g3-step.sh` (state on `/boot`, the one thing probe and default share besides the ESP):
+
+| Boot | What it showed |
+| ---- | -------------- |
+| 1, default | `/` and `home` snapshotted as p2 and p2-home; fstab rewritten as above; `/boot`'s kernel reused (identical image, 10 ms); armed |
+| 2, probe | `/` = `p2`, `/home` = `p2-home`; osreflogd `inactive`, condition `no` (skipped, not failed); dnf hook gone; boot record written; labels right without any relabel (`systemd_unit_file_t`, `etc_t`, `var_lib_t`: new files take their directory's type); **0 failed units**, state `running`; a file written to `/home` |
+| 3, default | the file is not in the real `/home` (it is in p2-home); boot record read from the clone (`probe=2`, kernel 7.2.9); default verified; disarmed; both subvolumes deleted |
+
+The host side now reports `ok   g3-step.sh` (the `$LINES` fix from G2 confirmed).
