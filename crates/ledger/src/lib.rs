@@ -318,6 +318,19 @@ pub struct Ledger {
     conn: Connection,
 }
 
+/// Where a user's own ledger lives (user scope, written by `osreflog-user`):
+/// `$XDG_STATE_HOME/osreflog/user.db`, else `~/.local/state/osreflog/user.db`.
+#[must_use]
+pub fn user_ledger_path() -> Option<std::path::PathBuf> {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+        })?;
+    Some(state.join("osreflog").join("user.db"))
+}
+
 impl Ledger {
     /// Opens (creating and migrating if needed) the ledger at `path`.
     ///
