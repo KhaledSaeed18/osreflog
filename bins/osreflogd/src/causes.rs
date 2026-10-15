@@ -242,7 +242,24 @@ pub struct Builder {
 }
 
 /// Merges `new` into the change already recorded for the same path in this cause.
-fn coalesce(existing: &mut Vec<LiveChange>, new: LiveChange) {
+fn coalesce(existing: &mut Vec<LiveChange>, mut new: LiveChange) {
+    // A rename moves an object away from its old name: whatever this cause recorded there is
+    // superseded. If it created the source (a temp file such as `/etc/passwd+` or an
+    // editor's `.foo.swp`), the rename *replaces* the target rather than moving a file.
+    let mut replaces = false;
+    if new.op == "rename"
+        && let Some(src) = new.from.clone()
+        && let Some(i) = existing.iter().rposition(|c| c.path == src)
+    {
+        replaces = existing[i].op == "create";
+        if replaces {
+            // Moving an earlier rename further keeps its original name; a created temp has none.
+            new.from = None;
+        } else {
+            new.from = existing[i].from.clone().or(new.from);
+        }
+        existing.remove(i);
+    }
     if let Some(i) = existing.iter().rposition(|c| c.path == new.path) {
         let old = &existing[i];
         let merged_op = match (old.op.as_str(), new.op.as_str()) {
@@ -253,10 +270,16 @@ fn coalesce(existing: &mut Vec<LiveChange>, new: LiveChange) {
             ("create", _) => "create",
             (_, "delete") => "delete",
             ("rename", "modify" | "attr") => "rename",
-            (_, "modify") | ("modify", _) => "modify",
+            // A rename onto a path this cause already changed writes over it (temp file).
+            (_, "rename" | "modify") | ("modify", _) => "modify",
             (_, op) => op,
         };
-        let from = old.from.clone().or_else(|| new.from.clone());
+        // A replace has no old name; a moved file that is then modified keeps its old name.
+        let from = if new.op == "rename" {
+            None
+        } else {
+            old.from.clone()
+        };
         let blob = new.blob.clone().or_else(|| old.blob.clone());
         let size = new.size.or(old.size);
         existing[i] = LiveChange {
@@ -268,14 +291,7 @@ fn coalesce(existing: &mut Vec<LiveChange>, new: LiveChange) {
         };
         return;
     }
-    // A rename of something this cause created (an editor's temp file) replaces the target.
-    if new.op == "rename"
-        && let Some(src) = &new.from
-        && let Some(i) = existing
-            .iter()
-            .rposition(|c| &c.path == src && c.op == "create")
-    {
-        existing.remove(i);
+    if replaces {
         existing.push(LiveChange {
             op: "modify".to_owned(),
             from: None,
@@ -541,6 +557,36 @@ mod tests {
         assert_eq!(
             (v[0].path.as_str(), v[0].op.as_str(), v[0].from.as_deref()),
             ("/etc/hosts", "modify", None)
+        );
+    }
+
+    #[test]
+    fn useradd_style_replace_keeps_no_temp_and_no_old_name() {
+        // shadow-utils: touch /etc/passwd (backup link), write /etc/passwd+, rename it over.
+        let mut v = Vec::new();
+        coalesce(&mut v, change("/etc/passwd", "attr", 1));
+        coalesce(&mut v, change("/etc/passwd+", "create", 2));
+        coalesce(&mut v, change("/etc/passwd+", "modify", 3));
+        let mut rename = change("/etc/passwd", "rename", 4);
+        rename.from = Some("/etc/passwd+".into());
+        coalesce(&mut v, rename);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(
+            (v[0].path.as_str(), v[0].op.as_str(), v[0].from.as_deref()),
+            ("/etc/passwd", "modify", None)
+        );
+    }
+
+    #[test]
+    fn a_real_move_keeps_its_old_name() {
+        let mut v = Vec::new();
+        let mut mv = change("/etc/b.conf", "rename", 1);
+        mv.from = Some("/etc/a.conf".into());
+        coalesce(&mut v, mv);
+        coalesce(&mut v, change("/etc/b.conf", "modify", 2));
+        assert_eq!(
+            (v[0].op.as_str(), v[0].from.as_deref()),
+            ("rename", Some("/etc/a.conf"))
         );
     }
 

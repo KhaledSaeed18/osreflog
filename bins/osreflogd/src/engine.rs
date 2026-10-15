@@ -905,7 +905,13 @@ impl Engine {
         if change.op == "create" {
             return Ok((None, None));
         }
-        let original = change.from.as_deref().unwrap_or(&change.path);
+        // Only a move takes its "before" from the old name; a replace (temp file renamed over
+        // the target) is compared with the target's own previous content.
+        let original = if change.op == "rename" {
+            change.from.as_deref().unwrap_or(&change.path)
+        } else {
+            &change.path
+        };
         let (blob, target, checkpoints) = {
             let l = lock(&self.ledger);
             (
