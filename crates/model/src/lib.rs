@@ -109,6 +109,11 @@ const NOISE: &[&str] = &[
     "/var/lib/logrotate/",
     "/var/lib/NetworkManager/timestamps",
     "/var/lib/systemd/random-seed",
+    // Container engines' image and layer stores: their own databases, kept open and written
+    // in place (so only the state witness sees them), and changed by pulls and builds, not by
+    // configuration (P4: dockerd's identity cache was the one unexplained change).
+    "/var/lib/docker/",
+    "/var/lib/containers/",
 ];
 const CONFIG: &[&str] = &["/etc/", "/opt/", "/usr/local/", "/boot/"];
 const STATE: &[&str] = &["/var/", "/root/", "/srv/"];
@@ -435,6 +440,10 @@ mod tests {
         );
         assert_eq!(classify("/var/lib/NetworkManager/timestamps"), Class::Noise);
         assert_eq!(classify("/var/lib/rsyslog/imjournal.state"), Class::Noise);
+        assert_eq!(
+            classify("/var/lib/docker/image/identity-cache.db"),
+            Class::Noise
+        );
         assert_eq!(classify("/variable"), Class::Other);
         assert_eq!(classify("/home"), Class::Other);
     }
