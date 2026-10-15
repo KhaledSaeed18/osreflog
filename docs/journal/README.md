@@ -8,4 +8,4 @@ One entry per phase, written while the phase runs and closed when its exit crite
 | P2 | [p2-slice.md](./p2-slice.md) | Closed 2026-10-15 |
 | P3 | [p3-live.md](./p3-live.md) | Closed 2026-10-15 |
 | P4 | [p4-semantics.md](./p4-semantics.md) | Closed 2026-10-15 |
-| P5 | [p5-undo.md](./p5-undo.md) | In progress |
+| P5 | [p5-undo.md](./p5-undo.md) | Closed 2026-10-15 |

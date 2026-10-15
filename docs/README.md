@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** the WRITE GATE and P5 (undo) next; P4 closed 2026-10-15 ([journal](./journal/p4-semantics.md)): D-Bus callers credited, semantic summaries in a sandboxed worker, every parser fuzzed 1 h with 0 findings, and the user scope (dconf). Last updated 2026-10-15.
+**Status:** P6 (bisect) next; P5 and the write gate closed 2026-10-15 ([journal](./journal/p5-undo.md)): undo passes its root matrix under the daemon's own sandbox and 15/15 live scenarios, with conflicts left alone. Last updated 2026-10-15.
 
 ## Reading order
 
