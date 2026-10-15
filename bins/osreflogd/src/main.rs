@@ -56,10 +56,38 @@ fn main() -> anyhow::Result<()> {
         tracing::info!(id = c.id, "boot checkpoint");
     }
 
+    let root = engine.layout().root.clone();
+    let capture = match osreflogd::capture::spawn(
+        Arc::clone(&engine),
+        Arc::clone(&engine.live),
+        &root,
+        &engine.blob_dir(),
+    ) {
+        Ok(handle) => {
+            engine
+                .live_started()
+                .context("recording the live witness start")?;
+            Some(handle)
+        }
+        Err(e) => {
+            tracing::error!("live witness unavailable, running with the state witness only: {e:#}");
+            None
+        }
+    };
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(serve(engine, args.session_bus))
+    let served = runtime.block_on(serve(Arc::clone(&engine), args.session_bus));
+    if let Some(handle) = capture {
+        engine
+            .live
+            .stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = handle.join();
+        engine.live_stopped();
+    }
+    served
 }
 
 async fn serve(engine: Arc<Engine>, session_bus: bool) -> anyhow::Result<()> {

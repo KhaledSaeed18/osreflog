@@ -190,11 +190,57 @@ impl Service {
             "post" => reason::POST_DNF,
             _ => return Err(Error::Invalid(format!("unknown hook phase {phase:?}"))),
         };
+        if why == reason::PRE_DNF {
+            let label = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .map(|s| s.trim().to_owned())
+                .unwrap_or_default();
+            self.engine.live.bracket_open(pid, label);
+        }
         let out = self.run(move |e| e.checkpoint(why, None, Some(pid))).await;
         if why == reason::POST_DNF {
+            self.engine.live.bracket_close(pid);
             self.wake.notify_one();
         }
         out
+    }
+
+    /// The newest causes the live witness recorded (`[Cause]` as JSON).
+    async fn causes(
+        &self,
+        limit: u32,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        self.authorize(&header, c, Need::Read).await?;
+        let limit = usize::try_from(limit)
+            .unwrap_or(usize::MAX)
+            .clamp(1, 10_000);
+        self.run(move |e| e.causes(limit)).await
+    }
+
+    /// One cause with all its changes (`CauseDetail` as JSON).
+    async fn show(
+        &self,
+        id: i64,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        self.authorize(&header, c, Need::Read).await?;
+        self.run(move |e| e.cause_detail(id)).await
+    }
+
+    /// Why a path changed: its newest live changes, causes, and content before and after
+    /// (`[WhyEntry]` as JSON). Secrets are never stored, so never returned.
+    async fn why(
+        &self,
+        path: String,
+        limit: u32,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        self.authorize(&header, c, Need::Read).await?;
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX).clamp(1, 1000);
+        self.run(move |e| e.why(&path, limit)).await
     }
 }
 
