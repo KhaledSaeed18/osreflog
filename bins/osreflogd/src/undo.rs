@@ -249,6 +249,13 @@ impl Planner<'_> {
                     continue;
                 }
             }
+            if osreflog_model::secrets::is_secret_path(&c.path) {
+                skip(
+                    &c.path,
+                    "a secret: restore it by hand from a snapshot".into(),
+                );
+                continue;
+            }
             let expect = match recorded_after(c).map_or_else(|| self.after_unrecorded(c), Ok) {
                 Ok(s) => s,
                 Err(reason) => {
@@ -356,6 +363,9 @@ pub fn preview(engine: &Engine, id: i64) -> Result<(Plan, Preview)> {
     let root = Root::open(&root_path).map_err(|e| invalid(format!("opening the root: {e}")))?;
     let blobs = Blobs::new(&engine.blob_dir()).map_err(|e| invalid(format!("blobs: {e}")))?;
     if cause.kind == "dnf" {
+        // The transaction is recorded with the interval after it, computed in the
+        // background: compute what's pending first, so a transaction that just ended is known.
+        engine.compute_pending()?;
         let tx = engine
             .ledger()
             .transaction_near(cause.started_ms / 1000 - 5, cause.ended_ms / 1000 + 60)?;

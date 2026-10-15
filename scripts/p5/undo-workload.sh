@@ -50,7 +50,8 @@ undo "$ID"
 check 'grep -q "mode = old" $DIR/sed.conf && grep -q "keep = yes" $DIR/sed.conf' "sed -i undone (#$ID)"
 settle
 UNDO1=$(cause_of "$DIR/sed.conf")
-check '[ "$(osreflog show $UNDO1 --json | python3 -I -c "import json,sys; print(json.load(sys.stdin)[\"cause\"][\"kind\"])")" = undo ]' "the undo is recorded as an undo cause (#$UNDO1)"
+kind_of() { osreflog show "$1" --json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["cause"]["kind"])'; }
+check '[ "$(kind_of $UNDO1)" = undo ]' "the undo is recorded as an undo cause (#$UNDO1)"
 
 echo; echo "2. an editor's save (temp file renamed over)"
 python3 -I -c "
@@ -98,8 +99,12 @@ osreflog undo "$ID" --apply >/dev/null 2>&1
 check '[ "$(cat $DIR/conflict.conf)" = v3 ]' "conflict left alone: v3 kept (#$ID)"
 
 echo; echo "8. undo of an undo"
-undo "$UNDO1" >/dev/null
-check 'grep -q "mode = new" $DIR/sed.conf' "undoing #$UNDO1 puts the sed change back"
+if [ "$(kind_of $UNDO1)" = undo ]; then
+    undo "$UNDO1" >/dev/null
+    check 'grep -q "mode = new" $DIR/sed.conf' "undoing #$UNDO1 puts the sed change back"
+else
+    bad "no undo cause from step 1 to undo"
+fi
 
 echo; echo "9. refusals and delegations"
 echo "not a real key" >"$DIR/test.key"; settle
