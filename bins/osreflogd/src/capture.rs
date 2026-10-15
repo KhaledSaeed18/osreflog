@@ -216,6 +216,8 @@ struct Capture {
     self_pid: u32,
     last_event_ms: i64,
     ring_drops_seen: u64,
+    /// The previous event if it was a rename: (from, to, pid).
+    last_rename: Option<(String, String, u32)>,
 }
 
 impl Capture {
@@ -263,6 +265,9 @@ impl Capture {
         let from = old.and_then(|o| self.resolver.full(o)).map(|(_, p, _)| p);
         if ev.is_dir() && matches!(op, "rename" | "delete") {
             self.resolver.forget(from.as_deref().unwrap_or(&path));
+        }
+        if self.exchange_echo(op, from.as_deref(), &path, pid) {
+            return;
         }
         let class = class_of(&path);
         if class == Class::Noise {
@@ -326,6 +331,24 @@ impl Capture {
         };
         self.builder.add(&classified, change, now);
         self.live.stats().recorded += 1;
+    }
+
+    /// Whether this event is the second half of a `renameat2(RENAME_EXCHANGE)`, which
+    /// reports two moves, one each way (undo swaps files this way). The second isn't a move:
+    /// both names still exist, with their content swapped.
+    fn exchange_echo(&mut self, op: &str, from: Option<&str>, path: &str, pid: u32) -> bool {
+        let previous = self.last_rename.take();
+        let (true, Some(from)) = (op == "rename", from) else {
+            return false;
+        };
+        if previous
+            .as_ref()
+            .is_some_and(|(pf, pt, pp)| pf == path && pt == from && *pp == pid)
+        {
+            return true;
+        }
+        self.last_rename = Some((from.to_owned(), path.to_owned(), pid));
+        false
     }
 
     /// Credits a daemon's cause to the client that asked it over D-Bus, if one did.
@@ -544,6 +567,7 @@ pub fn spawn(
         builder: Builder::default(),
         blobs,
         self_pid: std::process::id(),
+        last_rename: None,
         last_event_ms: now_ms(),
         ring_drops_seen: 0,
     };

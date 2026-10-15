@@ -80,6 +80,13 @@ fn live_root(engine: &Engine) -> PathBuf {
     l.top.join(&l.subvolume)
 }
 
+/// The engine's own temporary names (`.osreflog-undo.<pid>.<n>`): never restored.
+fn is_undo_temp(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .is_some_and(|n| n.starts_with(".osreflog-undo."))
+}
+
 /// A, from the record alone: `None` when the cause didn't record the content it left.
 fn recorded_after(c: &LiveChange) -> Option<State> {
     if c.op == "delete" {
@@ -266,6 +273,7 @@ impl Planner<'_> {
                 && let Some(from) = c.from.as_deref()
                 && !paths.contains(from)
                 && classify(from) == Class::Config
+                && !is_undo_temp(from)
             {
                 match self.before(from, c.ts_ms, c.kind == "dir") {
                     Ok(restore) => steps.push(Step {
