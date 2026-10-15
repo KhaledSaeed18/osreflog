@@ -2,7 +2,7 @@
 
 **A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.**
 
-> **Status: P4 done; undo (P5) is next, behind the write gate.** osreflog runs on a real Fedora 44 machine. Every change to `/etc` and friends gets a cause: the command, service, package transaction or app that made it, including tools that ask a daemon over D-Bus (`timedatectl`, `firewall-cmd`, `systemctl enable`…). `osreflog why <path>` shows who changed a file and what it means (`user osreflogwl added`, `time zone: UTC → Asia/Beirut`, `enabled foo.service`), computed in a sandboxed worker. `osreflog user` does the same for your own GNOME settings. Bisect and undo come later. See the [roadmap](docs/roadmap.md).
+> **Status: P5 done; bisect (P6) is next.** osreflog runs on a real Fedora 44 machine. Every change to `/etc` and friends gets a cause: the command, service, package transaction or app that made it, including tools that ask a daemon over D-Bus (`timedatectl`, `firewall-cmd`, `systemctl enable`…). `osreflog why <path>` shows who changed a file and what it means (`user osreflogwl added`, `time zone: UTC → Asia/Beirut`), computed in a sandboxed worker. `osreflog undo #id` reverts a cause path by path: a dry run first, a verified checkpoint before anything is written, and a path that changed since is left alone. `osreflog user` and `osreflog undo --user` do the same for your own GNOME settings. See the [roadmap](docs/roadmap.md).
 
 "It worked last week." Your Wi-Fi drops, suspend stops working, or an app won't start, and something changed in between. A package update, a config edit, a GNOME setting, a firmware update, a command you ran at 2 a.m. Linux can take snapshots of your system (Snapper, Timeshift), but none of them can tell you *what* changed between two snapshots, *what caused* each change, or *which one* broke things.
 
@@ -59,7 +59,7 @@ probe 1/4  #2211  good    (nspawn, 3.1 s)
 ...
 first bad cause: #2215  /etc/NetworkManager/conf.d/wifi.conf by tlp.service
 
-$ osreflog undo #2215 --dry-run
+$ osreflog undo #2215            # a dry run; --apply to apply
 ```
 
 ## How it works

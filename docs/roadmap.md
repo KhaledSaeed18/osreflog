@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **WRITE GATE next, then P5.** P0 closed 2026-10-14; P1, P2, P3 and P4 closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P6 (bisect) next.** P0 closed 2026-10-14; P1 to P5 and the write gate closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -67,20 +67,20 @@ The whole read-only path, with no live capture yet.
 
 **Exit:** every differ is fuzzed for at least 1 h with no crashes; `osreflog log` shows readable semantic summaries for the testbed scenarios. **Met** ([journal](./journal/p4-semantics.md)): 8 fuzz targets × 1 h, ~3.05 billion inputs, 0 findings, plus a differential check of version comparison against rpm (200,000 pairs, 0 mismatches); D-Bus-delegated writes credited to the caller for all six tools; workload 16/16 and user workload 8/8. Deferred: `~/.config` marks and the TOML/YAML/SELinux/effective-config differs to P8, the BLS differ to P5.
 
-## WRITE GATE
+## WRITE GATE (passed 2026-10-15)
 Before any code writes to the live `/`:
-- [ ] The undo engine passes its full test matrix in a VM (conflicts, symlink tricks, SELinux labels, xattrs, renames, deleted files)
-- [ ] `openat2` resolution tests: symlink swap races, `..`, magic links (`/proc/self/fd`), bind mounts
-- [ ] A `pre-undo` checkpoint is taken and verified before every apply
-- [ ] Threat-model mitigations for A1/A3 implemented and tested
-- [ ] Dry run is the default everywhere
+- [x] The undo engine passes its full test matrix ~~in a VM~~ in a contained scratch root under the daemon's own sandbox ([ADR 0011](./decisions/0011-gate-in-a-contained-scratch-root.md); it runs again in a VM in P6) (conflicts, symlink tricks, SELinux labels, xattrs, renames, deleted files)
+- [x] `openat2` resolution tests: symlink swap races, `..`, magic links (`/proc/self/fd`), bind mounts
+- [x] A `pre-undo` checkpoint is taken and verified before every apply
+- [x] Threat-model mitigations for A1/A3 implemented and tested
+- [x] Dry run is the default everywhere
 
-## P5: Undo
-- 3-way undo for files, deletions, creations (attic), unit enablement, dconf keys, BLS/grubenv
+## P5: Undo (closed 2026-10-15)
+- 3-way undo for files, deletions, creations (attic), unit enablement, dconf keys, ~~BLS/grubenv~~ (moved to P7: `/boot` is outside the btrfs witness)
 - Package causes delegated to `dnf5 history undo` with confirmation
 - `osreflog undo --dry-run / --apply`; undo of an undo
 
-**Exit:** the undo matrix passes on the real machine for the testbed scenarios; no conflict is ever silently overwritten.
+**Exit:** the undo matrix passes on the real machine for the testbed scenarios; no conflict is ever silently overwritten. **Met** ([journal](./journal/p5-undo.md)): gate 16/16 as root (0 escapes in a symlink-swap race), live undo workload 15/15 including a refused conflict and an undo of an undo, flood bounded.
 
 ## P6: Bisect (nspawn + vm)
 - Probe planner: checkpoint bisect, then cause bisect with replay (reflink from `cB` or blobs); approximation flags

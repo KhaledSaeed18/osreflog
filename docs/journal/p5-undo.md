@@ -1,9 +1,10 @@
 # P5: The write gate and undo
 
-- Status: **in progress**
+- Status: **closed**
 - Started: 2026-10-15
+- Closed: 2026-10-15
 - Roadmap: [WRITE GATE and P5](../roadmap.md#write-gate)
-- Exit: the write gate's checklist passes; the undo matrix passes on the real machine for the workload's scenarios; no conflict is ever silently overwritten.
+- Exit: the write gate's checklist passes; the undo matrix passes on the real machine for the workload's scenarios; no conflict is ever silently overwritten. **Met:** gate 16/16 as root under the daemon's own sandbox (0 escapes in a symlink-swap race); live undo workload 15/15 (a conflict left alone, an undo undone); flood test bounded.
 
 ## Plan
 
@@ -41,3 +42,75 @@ The engine only ever writes relative to the root fd it's given, so the scratch r
 ### The matrix
 
 Restores: modify, create (to the attic), delete (recreated with owner, mode, xattrs and SELinux label), rename, symlink retarget, symlink created and deleted, directory created (empty / not empty) and deleted. 3-way: already undone, conflict (content changed since), conflict during the swap (race), restore over a path that reappeared. Attacks on resolution: a parent directory swapped for a symlink (before and during the run), `..` and absolute paths in a plan, a magic link (`/proc/self/fd/…`) as a component, a bind mount inside the root, a FIFO or device where a file was. Refusals: out-of-scope path, secret, file capability.
+
+## Log
+
+### 2026-10-15: the engine, the worker, the interface
+
+- **`crates/undo`**, no unsafe code: plan types and checks (`plan.rs`), the operations relative to a pinned root fd (`apply.rs`), and what the CLI shows (`preview.rs`). 16 unprivileged tests, including one that stages a write between the 3-way check and the swap through a test-only hook: the swap is reversed and the step is a conflict.
+- **Planner** (`osreflogd/src/undo.rs`): per recorded change, A from the record (blob hash, symlink target, directory, absent) or, when no content was recorded, from the current file if nothing could have changed it since (no later record, no gap); B from the newest record since the path last went away, else the newest snapshot before the cause; owner, mode, xattrs and label from that snapshot. A move becomes two steps. Package-owned paths, state, the attic and secrets are listed as left alone, with the reason.
+- **Worker** (`osreflogd --undo-worker`): opens the root and the directories it may write, keeps only `CAP_CHOWN`, `CAP_FOWNER`, `CAP_DAC_OVERRIDE`, sets no-new-privileges and limits, and enters a Landlock domain that allows the scope directories and the attic only. `--undo-sandbox-selftest` proves it: writing in `etc` works; writing `var/tmp`, reading `usr` and executing anything fail.
+- **Interface:** `UndoPlan(id)` (read action) and `Undo(id, digest)` (new action `…undo`, `auth_admin`, never kept). `Undo` recomputes the plan and refuses if its digest isn't the one shown, takes a `pre-undo` checkpoint, verifies the ledger and the snapshot, plans again (it must still match), then runs the worker, reloads systemd if unit files or links changed, and returns the cause the live witness recorded for the undo. `osreflog undo #id` is the dry run with diffs; `--apply` applies; `--user` undoes a settings change with `dconf` as the user (ledger v5 keeps raw values for that, never a secret key's).
+- **The undo is a cause.** The daemon registers the worker's pid; the cause builder labels its writes `undo of #N`. Undoing that cause puts the change back.
+- **A3:** at most 256 causes open at once (more merge into one `flood` cause per uid) and 100,000 changes held across them (past that, changes are counted as `dropped` in `osreflog status`; the state witness still records them).
+
+### 2026-10-15: what the gate and the real machine found
+
+Five runs to green. Each failure was caught before a wrong write, and each fix is in:
+
+1. **`pam_namespace`:** the sudo session had a private `/var/tmp`, so `systemd-run` couldn't see the scratch area there. It moved to `/var/cache/osreflog-gate`.
+2. **The tests, not the engine:** files restored with `Meta::default()` (root, mode 0000) are secrets by osreflog's own rule and were refused before any path was resolved, so three resolution tests tested nothing. They now restore ordinary `0644` files. The first race run was 1.98 M refusals and 0 restores; the passing one exercised both.
+3. **`RestrictSUIDSGID=` blocks `openat2`.** The gate passed, then every undo on the installed daemon failed with `ENOSYS`: systemd implements that setting with a seccomp filter that fails `openat2` outright, because it can't inspect the mode inside `struct open_how`. The engine has no fallback to `openat` by design, so it refused everything (nothing was written). The setting is gone from the unit; undo refuses set-user-ID and set-group-ID bits itself, tested as root. **The gate now runs under every hardening directive of the daemon's unit**, read from the unit file, which immediately showed the second gap:
+4. **`CAP_CHOWN`** was missing from the unit's bounding set, so the worker couldn't have kept it. Added.
+5. **Delegation timing:** a dnf cause undone seconds after the transaction found no transaction, because the interval that records it is computed in the background. The preview now computes pending intervals first.
+
+Also found by reading the kernel: `renameat2(RENAME_EXCHANGE)` emits **two** move events, one each way. The live witness took the second for a real move and would have recorded the undo itself wrongly (so an undo couldn't be undone). A rename that mirrors the previous one from the same process is now the second half of an exchange and is ignored.
+
+### Results
+
+**Write gate** (`scripts/p5/gate.sh`, root, SELinux enforcing, kernel 7.2.9, inside `osreflogd.service`'s 20 hardening settings plus a writable scratch area): the engine's 10 tests and the matrix's 6 pass.
+
+| Matrix test | Result |
+| ----------- | ------ |
+| owner, mode, `user.*` xattr and SELinux label (`httpd_config_t`, `net_conf_t`) restored by the real worker | restored exactly; replaced version in the attic |
+| the worker's sandbox | write in `etc` ok; write `var/tmp`, read `usr`, exec: refused |
+| a bind mount inside the root | `EXDEV`: not crossed |
+| `/proc` mounted inside the root, and its magic links | refused both ways |
+| a parent directory swapped with a symlink to outside, 3 s | 3,541 runs: 375 restored inside, 3,166 refused, 19,771 swaps, **0 escaped** |
+| `/etc/shadow`, a file capability, a set-user-ID file | refused, even as root |
+
+**Live undo workload** (`scripts/p5/undo-workload.sh`, the installed daemon): **15/15**.
+
+| Change | Undo |
+| ------ | ---- |
+| `sed -i` | restored; recorded as an `undo` cause |
+| an editor's save (temp file renamed over) | restored |
+| a created file | moved to the attic |
+| a deleted file (`0640 root:wheel`, `etc_t`) | back with the same owner, mode and label |
+| `ln -sfn` | symlink points back |
+| `systemctl enable` (pid 1 writes the link) | link removed, systemd reloaded, unit disabled |
+| a file changed again after the cause | **conflict, left alone** (both hashes shown) |
+| the undo from the first row | undone: the `sed` change is back |
+| a `*.key` file | refused as a secret |
+| `dnf install figlet` | delegated: `dnf5 history undo 46`, which removed it |
+
+The ledger verified all 711 entries afterwards.
+
+**Flood** (`scripts/p5/flood.sh`, as an ordinary user): 100,000 processes and 300,000 file create/delete pairs. osreflogd went from 55 to 104 MB (limit 768 MB), the lineage table stopped at its 65,536 cap, the fanotify queue never overflowed, and `osreflog status` answered in 19 ms afterwards. An ordinary user can't write in-scope config at all, so the cause caps are covered by a unit test rather than this run.
+
+**User scope:** `osreflog undo --user` against real dconf: a restore, already undone, a conflict, and a secret key refused (its value is never kept).
+
+## The write gate
+
+- [x] The undo matrix passes, in a contained scratch root under the daemon's own sandbox ([ADR 0011](../decisions/0011-gate-in-a-contained-scratch-root.md); again in a VM in P6)
+- [x] `openat2` resolution tests: symlink swap race, `..`, magic links, bind mounts
+- [x] A verified `pre-undo` checkpoint before every apply
+- [x] A1: only paths the cause recorded, in scope, through a pinned fd, 3-way, `auth_admin` every time; A3: bounded causes, changes and lineage, tested
+- [x] Dry run is the default
+
+## What changed in the design
+
+- [ADR 0011](../decisions/0011-gate-in-a-contained-scratch-root.md): the gate's matrix in a contained scratch root instead of a VM.
+- [undo.md](../undo.md): how restores work as built (exchange-and-verify, the attic, plans by digest, user scope, unit enablement by link plus reload).
+- The daemon's unit: no `RestrictSUIDSGID=` (it blocks `openat2`), `CAP_CHOWN` added.
+- Boot config (BLS, `grubenv`) moves to P7: `/boot` is ext4 here and nothing records it.

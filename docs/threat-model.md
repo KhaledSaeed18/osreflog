@@ -31,10 +31,12 @@ osreflogd is a root daemon that watches the system's config files, records every
 - The ledger is `root:osreflog 0640`, D-Bus reads are polkit-gated, and nothing leaves the machine. There is no network code in osreflogd at all.
 
 **Undo as a root write primitive (A1)**
-- Undo only targets paths that the ledger recorded for that cause, and only in scope.
-- Every file operation is `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`, relative to a pinned dirfd for the scope root. No path-string opens.
-- 3-way check, and refusal on conflict ([undo.md](./undo.md)).
-- polkit `auth_admin` (not `_keep`) for `--apply` on package causes and boot config.
+- Undo only targets paths that the ledger recorded for that cause, and only in scope (`/etc`, `/opt`, `/usr/local`); never a secret, a file capability or a set-user-ID/set-group-ID bit.
+- Every directory is opened with `openat2` and `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV`, relative to a pinned fd for the root; every other call is `*at` on that fd with one final name. No path-string opens.
+- 3-way check at apply time, and a race-checked swap (`RENAME_EXCHANGE`, then the swapped-out file must still be what the cause left, else it's swapped back): refusal on conflict ([undo.md](./undo.md)). Nothing is deleted: removed and replaced versions go to the attic.
+- The writes happen in a worker with only `CAP_CHOWN`, `CAP_FOWNER` and `CAP_DAC_OVERRIDE`, no new privileges, and Landlock access to the scope directories and the attic only.
+- polkit `auth_admin` (never kept) for every apply; the apply must match the plan that was shown (by digest); a verified `pre-undo` checkpoint comes first.
+- Tested as root at the write gate ([journal](./journal/p5-undo.md)).
 
 **Parsers (A2)**
 - All content parsing runs in a summarize worker (`osreflogd --summarize-worker`, built in P4): a separate process that, before reading any input, sets resource limits (512 MiB address space, 5 s CPU, no file writes, no new processes), drops every capability, sets no-new-privileges, enters a Landlock domain with every filesystem and network right handled and none granted, and installs a seccomp allowlist that kills the process on anything else (read, write, memory, signals for its own abort, exit). Content goes in over a pipe as JSON; summaries come out. The daemon gives it 10 s.
@@ -50,7 +52,8 @@ osreflogd is a root daemon that watches the system's config files, records every
 - Bounded per-actor memory in the cause builder; coalesce repeated writes to the same path within a cause.
 - Lineage cache bounded (LRU, with exited processes evicted first).
 - On overload, drop *content* capture before dropping *events*, and record a gap. The send-stream diff at the next checkpoint guarantees no change is lost from the state record, only its attribution.
-- A per-uid rate threshold: a user generating more than N changes/s in scope gets a single summarised cause, flagged as "flood".
+- At most 256 causes open at once; changes for new ones beyond that merge into one `flood` cause per uid. At most 100,000 changes held across open causes; past that they're counted as `dropped` (the state witness still records them).
+- Measured (P5): 100,000 processes and 300,000 file events from an ordinary user left osreflogd at 104 MB, its lineage table at its cap, the fanotify queue without overflow, and `status` answering in 19 ms.
 
 **Boot safety (metal bisect)**
 - One-shot entries only (`grub2-reboot`), the default entry never modified, and probe roots are clones.
@@ -62,7 +65,7 @@ osreflogd is a root daemon that watches the system's config files, records every
 - This is tamper-evident, not tamper-proof: a root attacker can rewrite the chain. Optional later: periodically sign the head with a key held in the TPM, or copy the head hash off-machine.
 
 **The daemon itself**
-- systemd hardening: `ProtectHome=read-only` (system daemon never needs to read `$HOME` content), `ProtectKernelTunables=`, `ProtectClock=`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `IPAddressDeny=any`, `MemoryMax=`, `CPUQuota=`, and a capability bounding set limited to what fanotify, BPF, btrfs ioctls and mounts need (`CAP_SYS_ADMIN`, `CAP_BPF`, `CAP_PERFMON`, `CAP_DAC_READ_SEARCH`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETFCAP` for undo).
+- systemd hardening: `ProtectHome=read-only` (system daemon never needs to read `$HOME` content), `ProtectKernelTunables=`, `ProtectClock=`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `IPAddressDeny=any`, `MemoryMax=`, `CPUQuota=`, and a capability bounding set limited to what fanotify, BPF, btrfs ioctls and mounts need (`CAP_SYS_ADMIN`, `CAP_BPF`, `CAP_PERFMON`, `CAP_DAC_READ_SEARCH`, and `CAP_FOWNER`, `CAP_CHOWN`, `CAP_DAC_OVERRIDE` for undo; no `CAP_SETFCAP`: undo never restores file capabilities). Not `RestrictSUIDSGID=`: systemd implements it with a seccomp filter that blocks `openat2`, which undo depends on.
 - SELinux policy module (`osreflogd_t`), following the urljail experience; written in P8, with denials collected throughout development.
 
 ## Operating rules
