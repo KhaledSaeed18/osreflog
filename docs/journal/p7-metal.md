@@ -1,0 +1,57 @@
+# P7: The boot gate and metal bisect
+
+- Status: **pre-flight** (nothing built yet)
+- Started: 2026-10-15
+- Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate)
+- Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
+
+## Pre-flight (2026-10-15)
+
+Checked before writing any code, as an ordinary user (no sudo in the session).
+
+### What's in place
+
+| Item | Found | For |
+| ---- | ----- | --- |
+| Tree | `main` clean and in sync with `origin`; `cargo test --workspace` passes | starting point |
+| osreflogd | active since 20:30, dev install in `/usr/local` | probes are built by the running daemon |
+| Boot loader | GRUB 2.12 (`grub2-efi-x64` 2.12-66), BLS entries, `shim-x64` 16.1 | `grub2-reboot` one-shot entries |
+| Boot tools | `grub2-reboot`, `grub2-editenv`, `grub2-set-default`, `grubby`, `kernel-install`, `dracut` all installed | writing and arming the probe entry |
+| `/boot` | ext4 on `/dev/sda2`, 2.0 GiB, **1.3 GiB free**; kernels 7.1.6, 7.2.8, 7.2.9 + rescue, initramfs 46–50 MiB each | room for a probe initramfs or two under `/boot/osreflog/`; `grubenv` on ext4, so GRUB can clear `next_entry` itself |
+| Current cmdline | `root=UUID=7b7a13e0… ro rootflags=subvol=root rhgb quiet` | a probe entry only changes `rootflags=subvol=` and adds `osreflog.probe=N` |
+| Virtualization | `/dev/kvm`, `kvm_intel nested=Y`, `qemu-system-x86_64` 10.2.2, `virtiofsd` 1.14 in `/usr/libexec`, `edk2-ovmf` with `OVMF_CODE.secboot.fd` + `OVMF_VARS.secboot.fd` | the gate's test VM, booted with UEFI and Secure Boot like the laptop |
+| Disk | 175 GiB free on the btrfs | a test-VM disk image |
+| Fedora boot hooks | `grub-boot-success.timer` (user), `grub-boot-indeterminate.service`; no greenboot | GRUB's own boot-success flag; see "Fallback" below |
+
+### What changes the plan
+
+1. **Secure Boot is on** (`mokutil --sb-state`: enabled) and the kernel is in lockdown **integrity** mode. shim only lets GRUB start kernels signed by Fedora. Probe kernels are Fedora's own `vmlinuz` (from `/boot`, or copied out of the snapshot's `/usr/lib/modules/<ver>/`), so they are signed and boot; an initramfs is not checked by shim/GRUB, so a generated one is fine. A locally built kernel could never be a metal probe. The test VM must run OVMF with Secure Boot on, or it doesn't test the same path.
+2. **A probe that boots the full system would start osreflogd inside it.** The snapshot has `osreflogd.service` enabled and the dnf actions hook installed. Inside a probe, the daemon would capture, checkpoint and write to the same ledger as the real system. P6 probes never boot that far (`osreflog-probe.target`); a metal probe boots `graphical.target`. The probe must mask `osreflogd.service` and remove the dnf hook in the clone, and a small probe-side unit takes over (record "booted", show the verdict prompt).
+3. **`/etc/fstab` can't just be emptied** as P6 does. A metal probe needs `/boot`, `/boot/efi` and `/home`, and the ledger at `/var/lib/osreflog` (bisect.md, step 5). The `/` line says `subvol=root`. The probe's fstab is rewritten instead: `/` takes the probe's subvolume (or drops the `subvol=` option), the ledger subvolume is added, the rest kept (`/mnt/external` already has `nofail`). Whether `systemd-remount-fs` accepts the rewritten `/` line is tested in the VM.
+4. **`/home` in a probe.** Mounting the real `/home` means a probe's GNOME session writes to the real `~/.config` and dconf, which would leak probe state into the real system. Proposed: each probe mounts a writable snapshot of `home`, deleted with the probe. Decision needed (below).
+5. **Probes can't live in `osreflog/tmp/`.** P6 clears `tmp/` when the daemon starts, and a metal probe survives two reboots. Metal probes go in `osreflog/probes/pN`, as bisect.md already says, and `doctor --boot` owns their cleanup.
+6. **Root access.** The session has no sudo, so every root step (installing the daemon, writing `/boot`, `grub2-reboot`, running the gate) goes through scripts the owner runs, as in P5 and P6: `sudo scripts/p7/…`.
+7. **Memory.** 2.2 GiB available with 4.5 GiB in swap at the time of the check. The test VM gets 1–1.5 GiB and boots to `multi-user.target`; the GNOME parts of the probe flow (the verdict prompt) are tested on metal.
+
+### Fallback after a hung or panicked probe
+
+`grub2-reboot` sets `next_entry` in `/boot/grub2/grubenv`, and GRUB clears it as it boots that entry. So a probe that hangs falls back to the default entry on the next power cycle without any help from the probe. To be verified in the test VM (gate item 3), with Secure Boot on. Two cheap additions: `panic=10` on the probe's cmdline (a kernel panic reboots by itself, into the default), and a systemd `JobTimeoutSec=` on the probe's boot target with `JobTimeoutAction=reboot-force`.
+
+## Plan
+
+| Slice | What |
+| ----- | ---- |
+| **G1** test VM | `scripts/p7/testvm.sh`: a raw disk image laid out like the laptop (GPT: ESP vfat, `/boot` ext4, btrfs with `root` and `home`), populated without downloads: `root` received from a recent read-only checkpoint, `/boot` with one Fedora-signed kernel and a host-only initramfs, the ESP with Fedora's shim and GRUB. OVMF with Secure Boot, 1–1.5 GiB, serial console, `multi-user.target`. Booted and checked before osreflog touches it |
+| **G2** boot entries | osreflogd (new module): probe kernel lookup (reuse `/boot/vmlinuz-<ver>`, otherwise copy it and build an initramfs into `/boot/osreflog/`), the BLS entry `osreflog-probe.conf`, `grub2-reboot`, and a record of the default entry (`saved_entry` + checksum of its entry file) checked before and after every probe |
+| **G3** probe prep | metal probes in `osreflog/probes/pN`; fstab rewritten (item 3); `osreflogd` masked and the dnf hook removed in the clone; the probe-side unit; `/home` per the decision below |
+| **G4** doctor | `osreflog doctor --boot`: removes leftover probe entries, initramfs and clones when no bisect is waiting for them, and checks the default entry; run at every boot by a oneshot unit |
+| **G5** gate run | `scripts/p7/gate.sh` inside the test VM: full metal flow, default untouched after every probe, a hung probe (stopped at the GRUB menu, then a hard reset) and a panicked probe both come back to the default, `doctor --boot` cleans up; recovery note in the docs |
+| **P7a** verdicts | `bisect start / good / bad / skip / log` (manual verdicts, which P6 left for this phase), the session kept across reboots in the ledger |
+| **P7b** metal tier | `--tier metal`: probe → arm → reboot (asked, never automatic without `--yes`) → verdict in the probe → reboot → continue |
+| **P7c** auto | `--tier auto` with `--needs kernel\|hardware` |
+| **P7d** exit | seeded Wi-Fi powersave regression bisected on the laptop |
+
+## Decisions needed before G1
+
+- **Test VM disk:** built from a checkpoint of this machine (no download, same GRUB/shim/BLS and the same osreflog install, but it carries this machine's `/etc` secrets inside a local image), or the Fedora 44 Cloud Base image (~500 MB, roughly 1–2 h at P1's measured bandwidth, a different layout). Proposed: from a checkpoint, with the image kept under `osreflog/` and deleted at the end of the gate.
+- **`/home` in a metal probe:** a throwaway writable snapshot of `home` (proposed), or the real `/home`.

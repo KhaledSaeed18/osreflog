@@ -1,6 +1,6 @@
 # Environment
 
-Facts about the development host, collected 2026-10-14 and updated after P1 (2026-10-15). Re-check them at the start of each phase.
+Facts about the development host, collected 2026-10-14, updated after P1 and at P7 pre-flight (2026-10-15). Re-check them at the start of each phase.
 
 | Item | Value | Why it matters |
 | ---- | ----- | -------------- |
@@ -10,7 +10,8 @@ Facts about the development host, collected 2026-10-14 and updated after P1 (202
 | RAM | 7.1 GiB + 7.1 GiB zram; ~1.5 GiB available with the desktop running, ~3.8 GiB already in zram | vm probes run at 512 MiB (615 MiB qemu RSS in P1), one at a time; daemon RSS budget < 60 MB |
 | Disk | `/dev/sda3` btrfs, 236 GiB, 50 GiB used | plenty of room for snapshots; still bound and report it |
 | Layout | one btrfs fs: subvol `root` → `/`, `home` → `/home`, both `compress=zstd:1`; no separate `/var` subvolume | snapshots of `root` include `/var/log`, `/var/lib/docker`, `/var/lib/libvirt`. That's one reason undo is per-change, not a whole-subvolume rollback |
-| `/boot` | separate ext4; `/boot/efi` vfat; GRUB2 2.12 with BLS entries | `/boot` is outside snapshots: track its config as blobs; metal probes need a kernel in `/boot` |
+| `/boot` | separate ext4 (2.0 GiB, 1.3 GiB free at P7 pre-flight); `/boot/efi` vfat; GRUB2 2.12 with BLS entries, shim 16.1 | `/boot` is outside snapshots: track its config as blobs; metal probes need a kernel in `/boot` |
+| Secure Boot | **enabled**; kernel lockdown `integrity` (P7 pre-flight) | metal probes can only boot Fedora-signed kernels; the boot gate's test VM runs OVMF with Secure Boot |
 | Kernel images | `/usr/lib/modules/<ver>/vmlinuz` present (inside the root subvolume) | the vm tier can boot each snapshot's own kernel |
 | Kernel config | `CONFIG_FANOTIFY=y`, `CONFIG_FANOTIFY_ACCESS_PERMISSIONS=y`, `CONFIG_BPF_LSM=y`, `CONFIG_DEBUG_INFO_BTF=y`, `CONFIG_SECURITY_PATH=y`, `CONFIG_VIRTIO_FS=m`, `CONFIG_9P_FS=m` | fanotify + CO-RE eBPF + BPF LSM all available; virtiofs is a module, so the vm tier needs an initramfs |
 | Active LSMs | `lockdown,capability,yama,selinux,bpf,landlock,ipe,ima,evm` | BPF LSM usable; Landlock available for the parser sandbox; SELinux enforcing |
