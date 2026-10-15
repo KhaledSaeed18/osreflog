@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P6 (bisect) next; P5 and the write gate closed 2026-10-15 ([journal](./journal/p5-undo.md)): undo passes its root matrix under the daemon's own sandbox and 15/15 live scenarios, with conflicts left alone. Last updated 2026-10-15.
+**Status:** the boot gate and P7 (metal bisect) next; P6 closed 2026-10-15 ([journal](./journal/p6-bisect.md)): bisect finds the right cause in all 5 seeded scenarios, nspawn probes under a second, VM probes about 14 s at about 430 MiB. Last updated 2026-10-15.
 
 ## Reading order
 

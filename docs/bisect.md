@@ -20,7 +20,7 @@ Same exit-code contract as `git bisect run`, so existing habits transfer:
 | 125 | skip (this state can't be tested) |
 | timeout / probe failed to start | skip, with the reason logged |
 
-The test runs **inside** the probe, as root of the probe (it is a throwaway clone), with the test file copied in read-only. Examples:
+The test runs **inside** the probe, as root of the probe (it is a throwaway clone), copied in as `/var/lib/osreflog-probe/test`; its output is kept and shown with each probe. In an nspawn **command** probe no systemd is running: use `systemctl --root=/ …` to read unit state from the files, or `--boot`. Examples:
 - `systemctl is-active --wait NetworkManager && nmcli -t general status | grep -q connected` (vm tier)
 - `gnome-shell --version` / `flatpak run --command=true org.foo.App` (nspawn tier)
 - a script that loads a kernel module and checks `dmesg` (vm tier)
@@ -54,7 +54,8 @@ Probe count: ⌈log₂(checkpoints)⌉ + ⌈log₂(causes in interval)⌉, versu
 - `virtiofsd` (1.14 on this host) runs sandboxed, sharing only the probe subvolume (4 MiB RSS in P1).
 - No network by default (`-nic none`); `--net user` opt-in for tests that need it.
 - Every probe (both tiers) gets `/etc/fstab` neutralized, or systemd waits for this host's disks by UUID. Units known to fail in a probe are listed in the bisect log and don't count as test failures: in P1 the VM had none, and the container failed only `auditd.service` and `audit-rules.service` (no audit in containers).
-- The verdict comes back through a **file**, not the console: a bind-mounted directory for nspawn, a file inside the clone for the VM. `--console=pipe` captured nothing from a booted container in P1.
+- The verdict comes back through a **file** inside the probe, not the console (`--console=pipe` captured nothing from a booted container in P1). The probe service writes the exit code, syncs and runs `systemctl poweroff -ff` itself (P6: `SuccessAction=` didn't power the VM off), and the runner stops the VM 5 s after the result appears in any case.
+- Each probe runs as a transient unit that osreflogd starts through systemd's D-Bus API (`StartTransientUnit`, with `PrivateMounts`, `Delegate` and its own memory limit), outside the daemon's sandbox and memory cap. Measured in P6: nspawn command probes 0.3–0.9 s, VM probes 12.7–14.0 s with qemu at 424–436 MiB.
 - Budget: one probe at a time, **512 MiB** guest RAM with a free-page-reporting balloon. P1: `running` at 34.2 s with 0 failed units, qemu peak RSS 615 MiB. If `MemAvailable` drops below a threshold, the probe waits.
 
 ### Metal tier details (behind the boot gate)

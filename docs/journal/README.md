@@ -9,4 +9,4 @@ One entry per phase, written while the phase runs and closed when its exit crite
 | P3 | [p3-live.md](./p3-live.md) | Closed 2026-10-15 |
 | P4 | [p4-semantics.md](./p4-semantics.md) | Closed 2026-10-15 |
 | P5 | [p5-undo.md](./p5-undo.md) | Closed 2026-10-15 |
-| P6 | [p6-bisect.md](./p6-bisect.md) | In progress |
+| P6 | [p6-bisect.md](./p6-bisect.md) | Closed 2026-10-15 |

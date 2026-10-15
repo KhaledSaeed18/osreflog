@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P6 (bisect) next.** P0 closed 2026-10-14; P1 to P5 and the write gate closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **BOOT GATE next, then P7 (metal bisect).** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -82,14 +82,14 @@ Before any code writes to the live `/`:
 
 **Exit:** the undo matrix passes on the real machine for the testbed scenarios; no conflict is ever silently overwritten. **Met** ([journal](./journal/p5-undo.md)): gate 16/16 as root (0 escapes in a symlink-swap race), live undo workload 15/15 including a refused conflict and an undo of an undo, flood bounded.
 
-## P6: Bisect (nspawn + vm)
+## P6: Bisect (nspawn + vm) (closed 2026-10-15)
 - Probe planner: checkpoint bisect, then cause bisect with replay (reflink from `cB` or blobs); approximation flags
 - `nspawn` runner (ephemeral, `--boot` option, test copy-in, timeout)
 - `vm` runner: QEMU direct kernel boot from the probe, cached dracut virtiofs initramfs, sandboxed virtiofsd, vsock/serial result channel, memory guard
 - Seeded-regression suite: 6–10 scenarios (bad config line, package downgrade breaking a binary, masked unit, kernel module option, sysctl, SELinux boolean)
 - `bisect run / start / good / bad / skip / log / reset`
 
-**Exit:** the seeded suite finds the right cause in ≤ ⌈log₂ n⌉ + 1 probes; an nspawn probe takes < 5 s; a vm probe takes < 30 s and stays within 768 MiB.
+**Exit:** the seeded suite finds the right cause in ≤ ⌈log₂ n⌉ + 1 probes; an nspawn probe takes < 5 s; a vm probe takes < 30 s and stays within 768 MiB. **Met** ([journal](./journal/p6-bisect.md)): 5/5 scenarios (config line, masked unit, sysctl, dnf transaction, kernel module option in a VM) found the right cause within the bound; nspawn probes ≤ 0.9 s, vm probes ≤ 14 s at ≤ 436 MiB. Manual verdicts (`start/good/bad/skip`) move to P7 with the metal tier; the SELinux-boolean scenario wasn't built (neither tier runs SELinux).
 
 ## BOOT GATE
 Before any probe boots on real hardware:
