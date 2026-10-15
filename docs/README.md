@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P2 (vertical slice) next; P1 closed 2026-10-15 ([journal](./journal/p1-measure.md)). No Rust code yet. Last updated 2026-10-15.
+**Status:** P3 (live witness) next; P2 closed 2026-10-15 ([journal](./journal/p2-slice.md)): the read-only slice runs on the real machine. Last updated 2026-10-15.
 
 ## Reading order
 

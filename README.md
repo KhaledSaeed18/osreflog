@@ -2,11 +2,46 @@
 
 **A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.**
 
-> **Status: Phase 2 next (the read-only vertical slice).** P1 measured every primitive on real hardware ([journal](docs/journal/p1-measure.md)); there is no Rust code yet. The commands below are the design target, not a working tool. See the [roadmap](docs/roadmap.md).
+> **Status: P2 done, P3 next.** The read-only slice works on a real Fedora 44 machine. It takes checkpoints at boot and around every package transaction, and diffs them with btrfs send. It shows packages, files and dnf transactions, with history kept in a hash-chained ledger. *Who* changed each file (the live witness) comes in P3; bisect and undo come later. See the [roadmap](docs/roadmap.md).
 
 "It worked last week." Your Wi-Fi drops, suspend stops working, or an app won't start, and something changed in between. A package update, a config edit, a GNOME setting, a firmware update, a command you ran at 2 a.m. Linux can take snapshots of your system (Snapper, Timeshift), but none of them can tell you *what* changed between two snapshots, *what caused* each change, or *which one* broke things.
 
 osreflog records every change to your system's state together with its cause. It can rebuild the system as it was at any point in that history and bisect it the way `git bisect` searches commits.
+
+## What works today
+
+Real output after `sudo dnf remove figlet`, with osreflog installed:
+
+```
+$ osreflog diff @{1}..@{0}
+from c000002 (pre-dnf, 2026-10-15 10:04:17)
+to   c000003 (post-dnf, 2026-10-15 10:04:22)
+     1 config · 1 state · 77 package · 32 noise · seen by: state · 733 commands, 94 KiB stream, 5638 ms, cached
+     dnf #27 dnf remove -y figlet (uid 1000, ok)
+
+packages (1):
+  remove    figlet.x86_64  2.2.5-39.fc44
+
+files (2):
+  ~ /etc/ld.so.cache  [config file content,mode,owner,xattr,times]
+  ~ /var/lib/rsyslog/imjournal.state  [state file content,mode,owner,xattr,times]
+
+109 package-owned and noise paths hidden (--all to show)
+```
+
+`osreflog log` lists checkpoints with what changed since the one before. `osreflog diff` with no range shows what changed since the newest checkpoint. References work the way git's reflog does: `c42`, `@{1}`, `@{now}`, `@{boot-1}`, `@{yesterday}`. Measured on this laptop: the cached diff takes 6 ms, osreflog adds under a second to a dnf transaction, and the idle daemon uses 0.0 % CPU and 26 MB of RAM ([P2 journal](docs/journal/p2-slice.md)).
+
+Development install (Fedora on btrfs):
+
+```
+cargo build --release
+sudo scripts/install-dev.sh      # --uninstall to remove; history is kept
+osreflog doctor
+```
+
+## Where it's going
+
+The design target, not working yet:
 
 ```
 $ osreflog log --since yesterday

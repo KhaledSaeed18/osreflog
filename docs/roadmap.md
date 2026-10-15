@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P2 next.** P0 closed 2026-10-14, P1 closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P3 next.** P0 closed 2026-10-14, P1 and P2 closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -33,7 +33,7 @@ Learn the primitives with existing tools before writing Rust.
 
 **Exit:** a reproducible `scripts/p1/` set plus a journal entry with numbers. Q1, Q2, Q4 and Q7 answered, and the (verify) markers in the docs updated. **Met** ([journal](./journal/p1-measure.md)): Q1, Q2, Q7, Q8 resolved; Q4 answered for dnf and PackageKit, with the offline-update path moved to P2.
 
-## P2: Vertical slice: state witness only (next)
+## P2: Vertical slice: state witness only (closed 2026-10-15)
 The whole read-only path, with no live capture yet.
 - Cargo workspace, `osreflogd` + `osreflog` skeletons, D-Bus API (read methods), polkit policy
 - `btrfs` crate: snapshot/subvolume ioctls, send-stream (v2) parser with fixture streams from P1
@@ -45,9 +45,9 @@ The whole read-only path, with no live capture yet.
 - Q4 remainder: GNOME Software offline updates via dnf5daemon-server; Q3: send-stream size estimates, squota evaluated on the loopback image
 - Retention policy and `osreflog doctor` (layout, space, hook installed)
 
-**Exit:** after a real `dnf upgrade`, `osreflog diff @{1}..@{0}` shows packages and changed files in < 2 s; the daemon idles at < 0.3 % CPU.
+**Exit:** after a real `dnf upgrade`, `osreflog diff @{1}..@{0}` shows packages and changed files in < 2 s; the daemon idles at < 0.3 % CPU. **Met** ([journal](./journal/p2-slice.md)) with a real `dnf remove`: 6 ms, 0.0 % idle CPU, 26 MB RSS. Moved on: Q3 (space reporting) and Q4's offline-update path; diffs between pruned, non-consecutive checkpoints.
 
-## P3: Live witness and causes
+## P3: Live witness and causes (next)
 - `capture` crate: one fanotify filesystem mark, scope filtering in userspace, resolution by dir handle (`open_by_handle_at`), PIDFD; re-measure event rates under heavy browser load
 - `lineage` + `lineage-ebpf` (aya): fork/exec/exit ring buffer, pid+starttime cache with grace period
 - Cause builder rules (dnf bracket, unit, session/command, unknown); quiet-period closing
