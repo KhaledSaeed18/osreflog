@@ -514,7 +514,7 @@ impl Engine {
         Ok(pruned)
     }
 
-    fn resolve(&self, r: &str) -> Result<Resolved> {
+    pub(crate) fn resolve(&self, r: &str) -> Result<Resolved> {
         let parsed = refs::parse(r)?;
         Ok(refs::resolve(&lock(&self.ledger), parsed)?)
     }

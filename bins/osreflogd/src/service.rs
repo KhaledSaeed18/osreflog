@@ -39,6 +39,8 @@ pub struct Service {
     engine: Arc<Engine>,
     /// Wakes the background worker to compute pending intervals.
     pub wake: Arc<Notify>,
+    /// The current or last bisect session.
+    bisect: crate::bisect::Shared,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,13 +48,18 @@ enum Need {
     Read,
     Checkpoint,
     Undo,
+    Bisect,
     Root,
 }
 
 impl Service {
     #[must_use]
     pub fn new(engine: Arc<Engine>, wake: Arc<Notify>) -> Self {
-        Self { engine, wake }
+        Self {
+            engine,
+            wake,
+            bisect: crate::bisect::Shared::default(),
+        }
     }
 
     async fn authorize(
@@ -77,6 +84,7 @@ impl Service {
             Need::Read => (bus::ACTION_READ, false),
             Need::Checkpoint => (bus::ACTION_CHECKPOINT, true),
             Need::Undo => (bus::ACTION_UNDO, true),
+            Need::Bisect => (bus::ACTION_BISECT, true),
         };
         let allowed = auth::polkit_allows(connection, &caller, action, interactive)
             .await
@@ -274,6 +282,57 @@ impl Service {
         );
         self.wake.notify_one();
         serde_json::to_string(&applied).map_err(|e| Error::Failed(e.to_string()))
+    }
+
+    /// Starts a bisect (`osreflog_bisect::Args` as JSON) in the background; returns its
+    /// `Status`. One at a time.
+    async fn bisect_run(
+        &self,
+        args: String,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        let uid = self.authorize(&header, c, Need::Bisect).await?;
+        let args: osreflog_bisect::Args = serde_json::from_str(&args)
+            .map_err(|e| Error::Invalid(format!("bad arguments: {e}")))?;
+        tracing::info!(uid, good = %args.good, bad = %args.bad, tier = ?args.tier, "bisect requested");
+        let status = crate::bisect::start(Arc::clone(&self.engine), &self.bisect, args)?;
+        serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
+    }
+
+    /// The current or last bisect (`Status` as JSON, or `null`).
+    async fn bisect_status(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        self.authorize(&header, c, Need::Read).await?;
+        let status = self
+            .bisect
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
+    }
+
+    /// Forgets the last bisect; refused while one is running.
+    async fn bisect_reset(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        self.authorize(&header, c, Need::Bisect).await?;
+        let mut s = self
+            .bisect
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if s.as_ref().is_some_and(|s| s.running) {
+            return Err(Error::Invalid(
+                "a bisect is running; wait for it to finish".into(),
+            ));
+        }
+        *s = None;
+        Ok("null".into())
     }
 
     /// Why a path changed: its newest live changes, causes, and content before and after

@@ -18,6 +18,8 @@ pub mod bus {
     pub const ACTION_CHECKPOINT: &str = "io.github.khaledsaeed18.osreflog.checkpoint";
     /// Undoing a cause: admin authentication every time, never kept.
     pub const ACTION_UNDO: &str = "io.github.khaledsaeed18.osreflog.undo";
+    /// Running a bisect (builds probes, boots VMs): admin authentication, kept for a while.
+    pub const ACTION_BISECT: &str = "io.github.khaledsaeed18.osreflog.bisect";
 }
 
 /// Why a checkpoint was taken.

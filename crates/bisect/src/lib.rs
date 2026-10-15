@@ -4,6 +4,8 @@
 
 pub mod replay;
 pub mod search;
+pub mod session;
 
 pub use replay::{Action, CauseTouches, Op, Touch};
 pub use search::{Outcome, Search, Verdict, expected_probes};
+pub use session::{Args, Culprit, Finding, ProbeRecord, Status, Tier};

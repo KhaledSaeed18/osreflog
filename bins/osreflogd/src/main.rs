@@ -43,6 +43,11 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some(osreflogd::summarize::WORKER_FLAG) {
         std::process::exit(osreflogd::summarize::worker_main());
     }
+    // A bisect probe, run in its own transient unit by the daemon.
+    if std::env::args().nth(1).as_deref() == Some(osreflogd::runner::FLAG) {
+        let spec = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(osreflogd::runner::runner_main(&spec));
+    }
     // The undo worker: same executable, its own sandbox, the root to write beneath.
     if std::env::args().nth(1).as_deref() == Some(osreflogd::undo::WORKER_FLAG) {
         let root = std::env::args_os().nth(2).unwrap_or_default();
