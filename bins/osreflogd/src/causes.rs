@@ -395,6 +395,7 @@ mod tests {
             cgroup: cgroup.into(),
             cgroup_id: 0,
             exited: None,
+            seen_ms: 0,
         }
     }
 

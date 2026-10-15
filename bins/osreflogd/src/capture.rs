@@ -25,7 +25,25 @@ use rustix::event::{PollFd, PollFlags, poll};
 
 use crate::blobs::Blobs;
 use crate::causes::{self, Brackets, Builder, OpenCause};
-use crate::delegation::Calls;
+use crate::delegation::{Call, Calls, MATCH_WINDOW_MS};
+
+/// systemctl verbs that make pid 1 write unit files or symlinks.
+const SYSTEMCTL_WRITES: &[&str] = &[
+    "enable",
+    "disable",
+    "reenable",
+    "mask",
+    "unmask",
+    "link",
+    "preset",
+    "preset-all",
+    "set-default",
+    "add-wants",
+    "add-requires",
+    "revert",
+    "edit",
+    "set-property",
+];
 use crate::engine::{Engine, now_ms};
 use crate::lineage::{Lineage, ProcTable};
 
@@ -135,17 +153,23 @@ impl Resolver {
     }
 
     /// The directory's open fd and logical path, for a record on the tracked subvolume.
-    fn dir(&mut self, fid: &Fid) -> Option<(OwnedFd, String)> {
-        let fd = open_by_handle(
-            self.mount.as_fd(),
-            &fid.handle,
-            libc::O_PATH | libc::O_DIRECTORY,
-        )
-        .ok()?;
+    /// The directory's logical path and, when it can still be opened, an fd for it. The
+    /// cache comes first: a directory deleted right after its entries (`rm -rf`) can no
+    /// longer be opened by handle, but its path is still known.
+    fn dir(&mut self, fid: &Fid) -> Option<(Option<OwnedFd>, String)> {
+        let open = || {
+            open_by_handle(
+                self.mount.as_fd(),
+                &fid.handle,
+                libc::O_PATH | libc::O_DIRECTORY,
+            )
+            .ok()
+        };
         let key = (fid.handle.handle_type, fid.handle.bytes.clone());
         if let Some(p) = self.cache.get(&key) {
-            return Some((fd, p.clone()));
+            return Some((open(), p.clone()));
         }
+        let fd = open()?;
         let seen = std::fs::read_link(format!("/proc/self/fd/{}", fd.as_raw_fd())).ok()?;
         let seen = seen.to_str()?;
         if seen.ends_with(" (deleted)") {
@@ -156,10 +180,17 @@ impl Resolver {
             self.cache.clear();
         }
         self.cache.insert(key, path.clone());
-        Some((fd, path))
+        Some((Some(fd), path))
     }
 
-    fn full(&mut self, fid: &Fid) -> Option<(OwnedFd, String, Vec<u8>)> {
+    /// Drops cached paths at or under `path` (a directory renamed or deleted).
+    fn forget(&mut self, path: &str) {
+        let under = format!("{}/", path.trim_end_matches('/'));
+        self.cache
+            .retain(|_, p| p != path && !p.starts_with(&under));
+    }
+
+    fn full(&mut self, fid: &Fid) -> Option<(Option<OwnedFd>, String, Vec<u8>)> {
         let (fd, dir) = self.dir(fid)?;
         let name = fid.name.clone().unwrap_or_default();
         let path = if name.is_empty() || name == b"." {
@@ -224,15 +255,15 @@ impl Capture {
             (ev.fid(INFO_DFID_NAME), None)
         };
         let Some(target) = target else { return };
-        if ev.is_dir() && matches!(op, "rename" | "delete") {
-            self.resolver.cache.clear();
-        }
         let Some((dirfd, path, name)) = self.resolver.full(target) else {
             // Another subvolume, or a directory that's already gone.
             self.live.stats().out_of_scope += 1;
             return;
         };
         let from = old.and_then(|o| self.resolver.full(o)).map(|(_, p, _)| p);
+        if ev.is_dir() && matches!(op, "rename" | "delete") {
+            self.resolver.forget(from.as_deref().unwrap_or(&path));
+        }
         let class = class_of(&path);
         if class == Class::Noise {
             self.live.stats().out_of_scope += 1;
@@ -257,8 +288,12 @@ impl Capture {
         let wants_content =
             class == Class::Config && !is_dir && (ev.mask & FAN_CLOSE_WRITE != 0 || op == "rename");
         let (blob, size) = if wants_content {
-            self.blobs
-                .capture(dirfd.as_fd(), OsStr::from_bytes(&name), &path)
+            dirfd
+                .as_ref()
+                .and_then(|fd| {
+                    self.blobs
+                        .capture(fd.as_fd(), OsStr::from_bytes(&name), &path)
+                })
                 .map_or((None, None), |(h, s)| (Some(h), Some(s)))
         } else {
             (None, None)
@@ -290,7 +325,33 @@ impl Capture {
             .calls()
             .explaining(c.cause.actor.pid, c.cause.started_ms, c.cause.ended_ms)
             .cloned();
-        let Some(call) = call else { return };
+        let call = match call {
+            Some(call) => call,
+            // As root, systemctl talks to pid 1 over its private socket, which a bus monitor
+            // can't see: find the systemctl that just ran instead (lineage always sees it).
+            None if c.cause.actor.pid == 1 => {
+                let Some(p) = self.table.latest_seen(
+                    c.cause.started_ms - MATCH_WINDOW_MS,
+                    c.cause.ended_ms,
+                    |p| {
+                        p.comm == "systemctl"
+                            && p.args
+                                .get(1)
+                                .is_some_and(|v| SYSTEMCTL_WRITES.contains(&v.as_str()))
+                    },
+                ) else {
+                    return;
+                };
+                Call {
+                    ts_ms: p.seen_ms,
+                    client_pid: p.pid,
+                    owner_pid: Some(1),
+                    destination: "systemd".into(),
+                    method: format!("systemctl {}", p.args.get(1).map_or("", String::as_str)),
+                }
+            }
+            None => return,
+        };
         if self.table.chain(call.client_pid).is_empty()
             && let Some(p) = ProcTable::read_proc(call.client_pid)
         {
@@ -509,6 +570,26 @@ mod tests {
             r.logical("/run/osreflog/top/osreflog/ledger/ledger.sqlite"),
             None
         );
+    }
+
+    #[test]
+    fn forgetting_a_directory_keeps_its_siblings() {
+        let mut r = Resolver {
+            mount: File::open("/").unwrap(),
+            prefix: "/run/osreflog/top/root".into(),
+            cache: HashMap::new(),
+        };
+        for (i, p) in ["/etc/a.d", "/etc/a.d/sub", "/etc/a.dx", "/etc/b"]
+            .iter()
+            .enumerate()
+        {
+            r.cache
+                .insert((0, vec![u8::try_from(i).unwrap()]), (*p).to_owned());
+        }
+        r.forget("/etc/a.d");
+        let mut left: Vec<&str> = r.cache.values().map(String::as_str).collect();
+        left.sort_unstable();
+        assert_eq!(left, ["/etc/a.dx", "/etc/b"]);
     }
 
     #[test]

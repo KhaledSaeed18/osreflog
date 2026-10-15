@@ -47,6 +47,8 @@ pub struct Proc {
     pub cgroup: String,
     pub cgroup_id: u64,
     pub exited: Option<Instant>,
+    /// When this program started (exec or fork), Unix ms; for `/proc` seeds, when read.
+    pub seen_ms: i64,
 }
 
 /// One decoded ring-buffer record.
@@ -150,6 +152,7 @@ impl ProcTable {
                         .unwrap_or_default(),
                     cgroup_id: r.cgroup_id,
                     exited: None,
+                    seen_ms: crate::engine::now_ms(),
                 };
                 self.procs.insert(r.pid, child);
             }
@@ -177,6 +180,7 @@ impl ProcTable {
                         cgroup,
                         cgroup_id: r.cgroup_id,
                         exited: None,
+                        seen_ms: crate::engine::now_ms(),
                     },
                 );
             }
@@ -187,6 +191,19 @@ impl ProcTable {
             }
             _ => {}
         }
+    }
+
+    /// The process seen most recently in `[from_ms, to_ms]` that satisfies `pred`.
+    pub fn latest_seen(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        pred: impl Fn(&Proc) -> bool,
+    ) -> Option<&Proc> {
+        self.procs
+            .values()
+            .filter(|p| p.seen_ms >= from_ms && p.seen_ms <= to_ms && pred(p))
+            .max_by_key(|p| p.seen_ms)
     }
 
     /// The process and its ancestors, nearest first, up to (not including) pid 0.
@@ -265,6 +282,7 @@ impl ProcTable {
             cgroup: proc_cgroup(pid).unwrap_or_default(),
             cgroup_id: 0,
             exited: None,
+            seen_ms: crate::engine::now_ms(),
         })
     }
 
@@ -394,6 +412,7 @@ mod tests {
             cgroup: "/user.slice/user-1000.slice/session-3.scope".into(),
             cgroup_id: 9,
             exited: None,
+            seen_ms: crate::engine::now_ms(),
         }
     }
 
@@ -446,6 +465,27 @@ mod tests {
         t.gc(now + EXIT_GRACE + Duration::from_secs(1));
         assert!(t.get(200).is_none());
         assert!(t.get(100).is_some(), "live processes stay");
+    }
+
+    #[test]
+    fn latest_seen_picks_the_newest_match_in_the_window() {
+        let mut t = ProcTable::default();
+        for (pid, seen, verb) in [
+            (1, 1_000, "enable"),
+            (2, 5_000, "status"),
+            (3, 6_000, "enable"),
+            (4, 20_000, "enable"),
+        ] {
+            let mut p = shell();
+            p.pid = pid;
+            p.comm = "systemctl".into();
+            p.args = vec!["systemctl".into(), verb.into()];
+            p.seen_ms = seen;
+            t.insert(p);
+        }
+        let found = t.latest_seen(0, 10_000, |p| p.args.get(1).is_some_and(|v| v == "enable"));
+        assert_eq!(found.map(|p| p.pid), Some(3));
+        assert!(t.latest_seen(7_000, 10_000, |_| true).is_none());
     }
 
     #[test]
