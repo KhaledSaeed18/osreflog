@@ -128,9 +128,11 @@ pub async fn run(session: bool) -> anyhow::Result<ExitCode> {
     })
 }
 
-/// `osreflog doctor --boot`: runs osreflogd's boot doctor in its own transient unit, with the
-/// sandbox of `osreflog-boot-doctor.service` (a private mount namespace for the btrfs top
-/// level, only /boot writable), and passes its report and exit code through.
+/// `osreflog doctor --boot`: runs osreflogd's boot doctor in a private mount namespace (the
+/// btrfs top level is mounted there only) and passes its report and exit code through.
+/// Not through `systemd-run`: as root it talks to systemd's private socket, and from a
+/// service that connection is reset (P6, and again in P7 G4), while `unshare` works anywhere.
+/// The boot-time unit keeps the full sandbox.
 pub fn boot(dry_run: bool) -> anyhow::Result<ExitCode> {
     if !rustix::process::geteuid().is_root() {
         anyhow::bail!("doctor --boot changes /boot and deletes probe subvolumes: run it with sudo");
@@ -140,29 +142,10 @@ pub fn boot(dry_run: bool) -> anyhow::Result<ExitCode> {
         .and_then(|exe| Some(exe.parent()?.parent()?.join("libexec/osreflog/osreflogd")))
         .filter(|p| p.is_file())
         .unwrap_or_else(|| Path::new("/usr/libexec/osreflog/osreflogd").to_owned());
-    let mut cmd = std::process::Command::new("systemd-run");
-    cmd.args([
-        "--quiet",
-        "--pipe",
-        "--wait",
-        "--collect",
-        "--service-type=exec",
-    ]);
-    for p in [
-        "PrivateMounts=yes",
-        "RuntimeDirectory=osreflog-boot-doctor",
-        "RuntimeDirectoryMode=0700",
-        "ProtectSystem=strict",
-        "ReadWritePaths=/boot",
-        "ProtectHome=yes",
-        "PrivateTmp=yes",
-        "PrivateNetwork=yes",
-        "NoNewPrivileges=yes",
-        "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE",
-    ] {
-        cmd.arg("-p").arg(p);
-    }
-    cmd.arg(&daemon).arg("--boot-doctor");
+    let mut cmd = std::process::Command::new("unshare");
+    cmd.args(["--mount", "--propagation", "private"])
+        .arg(&daemon)
+        .arg("--boot-doctor");
     if dry_run {
         cmd.arg("--dry-run");
     }

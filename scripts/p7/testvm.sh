@@ -293,7 +293,7 @@ flow() {
     local loop W=/run/osreflog-testvm/img
     loop=$(losetup -fP --show "$DISK")
     # shellcheck disable=SC2064
-    trap "umount -R $W 2>/dev/null; losetup -d $loop" EXIT
+    trap "umount /run/osreflog-testvm/vmtop 2>/dev/null; umount -R $W 2>/dev/null; losetup -d $loop" EXIT
     mkdir -p "$W"
     mount -o subvol=root "${loop}p3" "$W"
     mount -o subvol=home "${loop}p3" "$W/home"
@@ -302,6 +302,19 @@ flow() {
     local f
     for f in "$@"; do install -m 0755 "$f" "$W/usr/local/bin/"; done
     rm -rf "$W/home/.testvm"
+    # A clean start: no test state, probe entry, kernel files, next_entry or probe clones left
+    # by an earlier flow that stopped half-way.
+    mount "${loop}p2" "$W/boot"
+    rm -rf "$W"/boot/.testvm-* "$W/boot/osreflog" "$W/boot/loader/entries/osreflog-probe.conf"
+    grub2-editenv "$W/boot/grub2/grubenv" unset next_entry
+    mkdir -p /run/osreflog-testvm/vmtop
+    mount -o subvolid=5 "${loop}p3" /run/osreflog-testvm/vmtop
+    local c
+    for c in /run/osreflog-testvm/vmtop/osreflog/probes/*; do
+        if [ -d "$c" ]; then btrfs subvolume delete "$c" >/dev/null 2>&1 || rm -rf "$c"; fi
+    done
+    rm -f /run/osreflog-testvm/vmtop/osreflog/probes/pending.json
+    umount /run/osreflog-testvm/vmtop
     setfiles -r "$W" "$W/etc/selinux/targeted/contexts/files/file_contexts" \
         "$W/usr/local/libexec" "$W/usr/local/bin" "$W/etc/systemd/system"
     sync
