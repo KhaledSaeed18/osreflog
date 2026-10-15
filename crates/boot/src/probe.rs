@@ -17,21 +17,12 @@
 //! whatever the system held, and an absolute symlink in it would otherwise lead a write out of
 //! the clone and into the real root.
 
-use std::fs::File;
-use std::io::Write as _;
-use std::os::fd::{AsFd as _, OwnedFd};
 use std::path::Path;
 
-use rustix::fs::{AtFlags, Mode, OFlags, ResolveFlags, mkdirat, openat2, unlinkat};
-use rustix::io::Errno;
+use osreflog_undo::beneath::Beneath;
 use serde::{Deserialize, Serialize};
 
 use crate::BootError;
-
-const RESOLVE: ResolveFlags = ResolveFlags::BENEATH
-    .union(ResolveFlags::NO_SYMLINKS)
-    .union(ResolveFlags::NO_MAGICLINKS)
-    .union(ResolveFlags::NO_XDEV);
 
 /// Inside a probe: the boot record and, later, the verdict.
 pub const PROBE_DIR: &str = "var/lib/osreflog-probe";
@@ -222,121 +213,6 @@ fn autostart(n: u32) -> String {
          Exec=notify-send --urgency=critical --app-name=osreflog \"osreflog bisect probe {n}\" \"{}\"\n",
         message(n).replace('"', "'")
     )
-}
-
-/// The clone's root directory, opened for writes beneath it.
-struct Beneath(OwnedFd);
-
-impl Beneath {
-    fn open(root: &Path) -> Result<Beneath, BootError> {
-        let fd = rustix::fs::open(
-            root,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(|e| BootError::io(root, e.into()))?;
-        Ok(Beneath(fd))
-    }
-
-    fn err(rel: &str, e: Errno) -> BootError {
-        let what = if e == Errno::LOOP || e == Errno::XDEV {
-            format!("{rel}: a symlink or mount point in the probe's path, refused")
-        } else {
-            format!("{rel}: {e}")
-        };
-        BootError::Refused(what)
-    }
-
-    /// Opens (creating as needed) the directory `rel`, one component at a time.
-    fn dir(&self, rel: &str) -> Result<OwnedFd, BootError> {
-        let mut path = String::new();
-        for part in rel.split('/').filter(|p| !p.is_empty()) {
-            if !path.is_empty() {
-                path.push('/');
-            }
-            path.push_str(part);
-            match mkdirat(self.0.as_fd(), path.as_str(), Mode::from_raw_mode(0o755)) {
-                Ok(()) | Err(Errno::EXIST) => {}
-                Err(e) => return Err(Self::err(&path, e)),
-            }
-        }
-        self.open_dir(rel)
-    }
-
-    fn open_dir(&self, rel: &str) -> Result<OwnedFd, BootError> {
-        openat2(
-            self.0.as_fd(),
-            if rel.is_empty() { "." } else { rel },
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-            Mode::empty(),
-            RESOLVE,
-        )
-        .map_err(|e| Self::err(rel, e))
-    }
-
-    fn split(rel: &str) -> (&str, &str) {
-        rel.rsplit_once('/').unwrap_or(("", rel))
-    }
-
-    /// Replaces `rel` with `data` (a new inode: a hard link elsewhere keeps the old content).
-    fn write(&self, rel: &str, data: &str, mode: u32) -> Result<(), BootError> {
-        let (parent, name) = Self::split(rel);
-        let dir = self.dir(parent)?;
-        let tmp = format!(".{name}.osreflog-tmp");
-        let _ = unlinkat(dir.as_fd(), tmp.as_str(), AtFlags::empty());
-        let fd = openat2(
-            dir.as_fd(),
-            tmp.as_str(),
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
-            Mode::from_raw_mode(mode),
-            RESOLVE,
-        )
-        .map_err(|e| Self::err(rel, e))?;
-        let mut f = File::from(fd);
-        f.write_all(data.as_bytes())
-            .and_then(|()| f.sync_all())
-            .map_err(|e| BootError::Refused(format!("{rel}: {e}")))?;
-        rustix::fs::renameat(dir.as_fd(), tmp.as_str(), dir.as_fd(), name)
-            .map_err(|e| Self::err(rel, e))
-    }
-
-    fn remove(&self, rel: &str) -> Result<bool, BootError> {
-        let (parent, name) = Self::split(rel);
-        let dir = match self.open_dir(parent) {
-            Ok(d) => d,
-            Err(_) if !self.exists_dir(parent) => return Ok(false),
-            Err(e) => return Err(e),
-        };
-        match unlinkat(dir.as_fd(), name, AtFlags::empty()) {
-            Ok(()) => Ok(true),
-            Err(Errno::NOENT) => Ok(false),
-            Err(e) => Err(Self::err(rel, e)),
-        }
-    }
-
-    fn exists_dir(&self, rel: &str) -> bool {
-        rustix::fs::statat(self.0.as_fd(), rel, AtFlags::SYMLINK_NOFOLLOW).is_ok()
-    }
-
-    fn symlink(&self, target: &str, rel: &str) -> Result<(), BootError> {
-        let (parent, name) = Self::split(rel);
-        let dir = self.dir(parent)?;
-        let _ = unlinkat(dir.as_fd(), name, AtFlags::empty());
-        rustix::fs::symlinkat(target, dir.as_fd(), name).map_err(|e| Self::err(rel, e))
-    }
-
-    fn read(&self, rel: &str) -> Result<String, BootError> {
-        let fd = openat2(
-            self.0.as_fd(),
-            rel,
-            OFlags::RDONLY | OFlags::CLOEXEC,
-            Mode::empty(),
-            RESOLVE,
-        )
-        .map_err(|e| Self::err(rel, e))?;
-        std::io::read_to_string(File::from(fd))
-            .map_err(|e| BootError::Refused(format!("{rel}: {e}")))
-    }
 }
 
 /// Turns the clone at `clone` into probe `prep.n`. Returns where its `/home` comes from.

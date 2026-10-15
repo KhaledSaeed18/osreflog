@@ -49,6 +49,16 @@ pub enum BootError {
     Tool(String),
 }
 
+impl From<osreflog_undo::beneath::BeneathError> for BootError {
+    fn from(e: osreflog_undo::beneath::BeneathError) -> BootError {
+        use osreflog_undo::beneath::BeneathError;
+        match e {
+            BeneathError::Open { path, source } => BootError::Io { path, source },
+            BeneathError::Refused(what) => BootError::Refused(what),
+        }
+    }
+}
+
 impl BootError {
     fn io(path: &Path, source: std::io::Error) -> BootError {
         BootError::Io {

@@ -650,7 +650,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "osreflog-rpm",
+ "osreflog-undo",
+ "rustix",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use osreflog_bisect::{Action, Op};
 use osreflog_btrfs::ioctl;
 use osreflog_undo::Root;
+use osreflog_undo::beneath::Beneath;
 use osreflog_undo::plan::{Meta, from_hex};
 use rustix::fs::{AtFlags, Mode, OFlags, ResolveFlags, XattrFlags, mkdirat, openat2, symlinkat};
 use rustix::io::Errno;
@@ -265,20 +266,22 @@ fn replay_one(root: &Root, probe: &Path, bad: &Path, blobs: &Blobs, op: &Op) -> 
 /// # Errors
 /// On any write failure.
 pub fn prepare(probe: &Path, test: &str) -> io::Result<()> {
-    std::fs::write(probe.join("etc/fstab"), "")?;
-    let dir = probe.join(PROBE_DIR);
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir)?;
-    let test_path = dir.join("test");
-    std::fs::write(&test_path, test)?;
-    std::fs::set_permissions(
-        &test_path,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    // The probe is a clone of the live system: a symlink in it must not lead a write out.
+    let root = Beneath::open(probe)?;
+    root.write("etc/fstab", "", 0o644)?;
+    root.remove_all(PROBE_DIR)?;
+    root.dir(PROBE_DIR)?;
+    root.write(&format!("{PROBE_DIR}/test"), test, 0o755)?;
+    root.write(
+        "etc/systemd/system/osreflog-probe.target",
+        TARGET_UNIT,
+        0o644,
     )?;
-    let units = probe.join("etc/systemd/system");
-    std::fs::create_dir_all(&units)?;
-    std::fs::write(units.join("osreflog-probe.target"), TARGET_UNIT)?;
-    std::fs::write(units.join("osreflog-probe.service"), SERVICE_UNIT)?;
+    root.write(
+        "etc/systemd/system/osreflog-probe.service",
+        SERVICE_UNIT,
+        0o644,
+    )?;
     Ok(())
 }
 
@@ -403,5 +406,51 @@ mod tests {
             std::fs::write(p.join("usr/lib/modules").join(v).join("vmlinuz"), "").unwrap();
         }
         assert_eq!(newest_kernel(p).as_deref(), Some("7.2.10-200.fc44.x86_64"));
+    }
+
+    #[test]
+    fn a_symlink_in_the_clone_cannot_lead_a_write_outside() {
+        for link in ["etc/systemd/system", "var/lib", "etc/fstab"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let (p, outside) = (tmp.path().join("probe"), tmp.path().join("outside"));
+            for d in ["etc/systemd", "var"] {
+                std::fs::create_dir_all(p.join(d)).unwrap();
+            }
+            std::fs::create_dir_all(&outside).unwrap();
+            if link == "etc/fstab" {
+                std::fs::write(outside.join("fstab"), "UUID=x / btrfs defaults 0 0\n").unwrap();
+                std::os::unix::fs::symlink(outside.join("fstab"), p.join(link)).unwrap();
+            } else {
+                std::fs::write(p.join("etc/fstab"), "").unwrap();
+                std::os::unix::fs::symlink(&outside, p.join(link)).unwrap();
+            }
+            let before: Vec<_> = std::fs::read_dir(&outside).unwrap().flatten().collect();
+            let r = prepare(&p, "#!/bin/sh\nexit 0\n");
+            let after: Vec<_> = std::fs::read_dir(&outside).unwrap().flatten().collect();
+            assert_eq!(after.len(), before.len(), "{link}: wrote outside the clone");
+            if link == "etc/fstab" {
+                // Replaced by a regular file in the clone; the link's target is untouched.
+                r.unwrap();
+                assert!(!p.join(link).is_symlink());
+                assert_eq!(
+                    std::fs::read_to_string(outside.join("fstab")).unwrap(),
+                    "UUID=x / btrfs defaults 0 0\n"
+                );
+            } else {
+                assert!(r.is_err(), "{link}: a symlink on the way is refused");
+            }
+        }
+
+        // A symlinked probe dir is removed as a link; its target keeps its files.
+        let tmp = tempfile::tempdir().unwrap();
+        let (p, outside) = (tmp.path().join("probe"), tmp.path().join("outside"));
+        std::fs::create_dir_all(p.join("var/lib")).unwrap();
+        std::fs::create_dir_all(p.join("etc")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, p.join(PROBE_DIR)).unwrap();
+        prepare(&p, "#!/bin/sh\nexit 0\n").unwrap();
+        assert!(outside.join("keep").exists());
+        assert!(p.join(PROBE_DIR).is_dir() && !p.join(PROBE_DIR).is_symlink());
     }
 }

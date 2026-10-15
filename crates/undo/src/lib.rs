@@ -6,6 +6,7 @@
 //! See `docs/undo.md` and the P5 journal for the rules and the test matrix.
 
 pub mod apply;
+pub mod beneath;
 pub mod plan;
 pub mod preview;
 
