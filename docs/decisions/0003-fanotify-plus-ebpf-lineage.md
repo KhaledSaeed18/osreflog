@@ -20,4 +20,5 @@ We need the changed object, the operation, and the actor's identity and ancestry
 ## Consequences
 - Two kernel interfaces to keep in sync, joined by pid + start time.
 - `/usr` is live-captured too (without content), so rpm writes outside a dnf bracket stand out.
+- P3: the mark goes through the btrfs top-level mount, because a filesystem mark through a subvolume fails with EXDEV. The eBPF side is C (`bpf/lineage.bpf.c`), as amended in ADR 0001.
 - The original plan (recursive inode marks per scope tree) is dropped: more code, more marks, and new directories race with mark creation.

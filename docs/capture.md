@@ -31,6 +31,8 @@ Scopes decide what is *recorded*, not what is marked:
 
 Events: `FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_ATTRIB | FAN_CLOSE_WRITE | FAN_ONDIR`, init flags `FAN_REPORT_DFID_NAME_TARGET | FAN_REPORT_PIDFD | FAN_UNLIMITED_QUEUE`. `FAN_CLOSE_WRITE` (not `FAN_MODIFY`) is the content trigger: one event per write session, and the file is complete when we read it.
 
+**Mark through the top-level mount** (P3). The kernel refuses `FAN_MARK_FILESYSTEM` with FID reporting through a btrfs *subvolume* (EXDEV: a subvolume has its own fsid, so a superblock mark through one is ambiguous). osreflogd marks the filesystem through its private top-level mount instead and resolves handles against it. Paths under `<top>/<tracked subvolume>/` map to `/...`; everything else (other subvolumes, the ledger, snapshots) is out of scope.
+
 **Resolve by handle, never by path string.** In P1, fatrace ran in a private mount namespace with the btrfs top level mounted, and every event path came back through that mount (`/run/…/top/root/etc/…`). osreflogd has the same layout, so it resolves each event from its directory file handle with `open_by_handle_at`, against a mount fd chosen per subvolume (the `root` subvolume as `/`, `home` as `/home`), and derives the logical path from that.
 
 Re-measure under heavy browser load in P3. If userspace filtering ever becomes the bottleneck, the fallback is BPF LSM hooks with in-kernel filtering (see ADR 0003).

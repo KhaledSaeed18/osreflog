@@ -2,7 +2,7 @@
 
 **A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.**
 
-> **Status: P2 done, P3 next.** The read-only slice works on a real Fedora 44 machine. It takes checkpoints at boot and around every package transaction, and diffs them with btrfs send. It shows packages, files and dnf transactions, with history kept in a hash-chained ledger. *Who* changed each file (the live witness) comes in P3; bisect and undo come later. See the [roadmap](docs/roadmap.md).
+> **Status: P3 in progress.** The live witness runs on a real Fedora 44 machine: every change to `/etc` and friends gets a cause (the command, service, package transaction or app that made it), and `osreflog why <path>` shows who changed a file and what changed inside it. Bisect and undo come later. See the [roadmap](docs/roadmap.md).
 
 "It worked last week." Your Wi-Fi drops, suspend stops working, or an app won't start, and something changed in between. A package update, a config edit, a GNOME setting, a firmware update, a command you ran at 2 a.m. Linux can take snapshots of your system (Snapper, Timeshift), but none of them can tell you *what* changed between two snapshots, *what caused* each change, or *which one* broke things.
 
