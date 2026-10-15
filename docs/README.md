@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P3 (live witness) built and installed; the testbed passes 16/16; dogfooding until 2026-10-22 ([journal](./journal/p3-live.md)). Last updated 2026-10-15.
+**Status:** P4 (semantic diffs, D-Bus caller attribution) next; P3 closed 2026-10-15 ([journal](./journal/p3-live.md)): 87/87 config changes explained across ~22 real admin tools. Last updated 2026-10-15.
 
 ## Reading order
 

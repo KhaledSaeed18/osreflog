@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P3 in progress**: built and installed; dogfooding until 2026-10-22 for the exit measurement. P0 closed 2026-10-14, P1 and P2 closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P4 next.** P0 closed 2026-10-14; P1, P2 and P3 closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -47,7 +47,7 @@ The whole read-only path, with no live capture yet.
 
 **Exit:** after a real `dnf upgrade`, `osreflog diff @{1}..@{0}` shows packages and changed files in < 2 s; the daemon idles at < 0.3 % CPU. **Met** ([journal](./journal/p2-slice.md)) with a real `dnf remove`: 6 ms, 0.0 % idle CPU, 26 MB RSS. Moved on: Q3 (space reporting) and Q4's offline-update path; diffs between pruned, non-consecutive checkpoints.
 
-## P3: Live witness and causes (in progress)
+## P3: Live witness and causes (closed 2026-10-15)
 - `capture` crate: one fanotify filesystem mark, scope filtering in userspace, resolution by dir handle (`open_by_handle_at`), PIDFD; re-measure event rates under heavy browser load
 - `lineage` + `lineage-ebpf` (aya): fork/exec/exit ring buffer, pid+starttime cache with grace period
 - Cause builder rules (dnf bracket, unit, session/command, unknown); quiet-period closing
@@ -56,9 +56,10 @@ The whole read-only path, with no live capture yet.
 - `osreflog why <path>`, `show #id`, `blame <path>` (line → cause, for text configs)
 - testbed: scripted scenarios in a VM (`sed -i`, `systemctl enable`, `dnf install`, `nmcli` change, editor save-by-rename) with expected causes
 
-**Exit:** the testbed passes; one week of dogfooding gives ≥ 95 % attribution of `/etc` changes, with the misses explained in the journal.
+**Exit:** the testbed passes; one week of dogfooding gives ≥ 95 % attribution of `/etc` changes, with the misses explained in the journal. **Amended and met** ([journal](./journal/p3-live.md)): the machine is dev-only, so a scripted workload of ~22 real admin tools replaced the week: 87/87 config changes explained, testbed 16/16.
 
-## P4: Semantic diffs and user scope
+## P4: Semantic diffs and user scope (next)
+- **First:** attribute D-Bus-delegated writes to the caller (timedatectl, hostnamectl, tuned-adm, firewall-cmd, nmcli, systemctl: P3 found six such tools). Monitor method calls on the system bus and join them to the daemon's writes
 - `osreflog-parse` sandboxed worker (seccomp + Landlock + cgroup limits)
 - Differs: keyfile/INI, systemd effective config + enablement, passwd/group, key=value, fstab, BLS, JSON/TOML/YAML, dconf, SELinux bits; a fuzz target for each
 - `osreflog-user`: dconf `Change` monitoring with app attribution; `~/.config` inode marks
