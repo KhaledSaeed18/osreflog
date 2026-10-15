@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+osreflog-bisect.workspace = true
 osreflog-ledger.workspace = true
 osreflog-model.workspace = true
 osreflog-undo.workspace = true

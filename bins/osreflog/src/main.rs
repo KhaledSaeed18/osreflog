@@ -1,5 +1,6 @@
 //! osreflog: see what changed on this system, and when. A thin client of osreflogd.
 
+mod bisect;
 mod doctor;
 mod format;
 mod textdiff;
@@ -20,7 +21,7 @@ use osreflog_model::{
     default_service = "io.github.khaledsaeed18.osreflog1",
     default_path = "/io/github/khaledsaeed18/osreflog1"
 )]
-trait Osreflog {
+pub(crate) trait Osreflog {
     fn status(&self) -> zbus::Result<String>;
     fn log(&self, limit: u32) -> zbus::Result<String>;
     fn diff(&self, from: &str, to: &str, all: bool) -> zbus::Result<String>;
@@ -32,6 +33,9 @@ trait Osreflog {
     fn why(&self, path: &str, limit: u32) -> zbus::Result<String>;
     fn undo_plan(&self, id: i64) -> zbus::Result<String>;
     fn undo(&self, id: i64, digest: &str) -> zbus::Result<String>;
+    fn bisect_run(&self, args: &str) -> zbus::Result<String>;
+    fn bisect_status(&self) -> zbus::Result<String>;
+    fn bisect_reset(&self) -> zbus::Result<String>;
 }
 
 /// How long the dnf hook waits for the daemon before giving up (and letting dnf continue).
@@ -141,6 +145,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Find which cause broke something: binary search over checkpoints, then causes, running
+    /// a test in throwaway copies of the system (containers or VMs).
+    Bisect {
+        #[command(subcommand)]
+        action: bisect::BisectCmd,
+    },
     /// Check the installation.
     Doctor,
     /// Called by the dnf5 actions plugin; never fails the transaction.
@@ -163,7 +173,7 @@ fn split_range(range: Option<&str>) -> (String, String) {
 }
 
 /// Turns a D-Bus method error into its message.
-fn explain(e: zbus::Error) -> anyhow::Error {
+pub(crate) fn explain(e: zbus::Error) -> anyhow::Error {
     match e {
         zbus::Error::MethodError(name, Some(msg), _)
             if name.as_str().starts_with(osreflog_model::bus::ERROR_PREFIX) =>
@@ -476,6 +486,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         .context("a cause id, like 12 or #12")?;
                     return undo(&p, id, apply, json).await;
                 }
+                Cmd::Bisect { action } => return bisect::run(&p, action).await,
                 Cmd::Hook { .. } | Cmd::Doctor | Cmd::User { .. } => bail!("unreachable"),
             }
             Ok(ExitCode::SUCCESS)

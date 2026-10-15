@@ -626,6 +626,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "osreflog-bisect",
  "osreflog-ledger",
  "osreflog-model",
  "osreflog-undo",
