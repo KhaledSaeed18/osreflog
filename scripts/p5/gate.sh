@@ -4,14 +4,16 @@
 #   cargo build --release && cargo test --release -p osreflog-undo --no-run   # as your user
 #   sudo scripts/p5/gate.sh
 #
-# The scratch root is a writable btrfs snapshot of / under /var/tmp/osreflog-gate. The tests
+# The scratch root is a writable btrfs snapshot of / under /var/cache/osreflog-gate. The tests
 # run in a systemd-run sandbox where everything else is read-only (ProtectSystem=strict,
 # ProtectHome=read-only), so a resolution bug would fail on a read-only filesystem instead of
 # writing to the machine. The snapshot is deleted at the end.
 set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-AREA=/var/tmp/osreflog-gate
+# Not under /var/tmp: a sudo session may have a private /var/tmp (pam_namespace) that
+# systemd services never see. /var/cache is shared, and osreflog classes it as noise.
+AREA=/var/cache/osreflog-gate
 
 newest() { find "$REPO/target/release/deps" -maxdepth 1 -type f -executable -name "$1-*" -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2; }
 GATE=$(newest gate)
@@ -38,18 +40,22 @@ echo "scratch root: a writable snapshot of / at $AREA/root"
 echo "kernel $(uname -r), SELinux $(getenforce)"
 
 run() {
-    systemd-run --wait --pipe --collect --quiet \
+    local unit=$1; shift
+    if ! systemd-run --wait --pipe --collect --quiet --unit="$unit" \
         -p ProtectSystem=strict -p ProtectHome=read-only -p ReadWritePaths="$AREA" \
         -p PrivateTmp=yes -p PrivateNetwork=yes \
         -E OSREFLOG_GATE_ROOT="$AREA/root" -E OSREFLOG_GATE_OUTSIDE="$AREA/outside" \
         -E OSREFLOG_DAEMON="$AREA/bin/osreflogd" \
-        "$@"
+        "$@"; then
+        journalctl -u "$unit" -n 15 --no-pager -o cat | grep -v "^$" | sed 's/^/  journal: /'
+        return 1
+    fi
 }
 status=0
 echo; echo "== the engine's tests, as root"
-run "$AREA/bin/engine" --test-threads=1 || status=1
+run osreflog-gate-engine "$AREA/bin/engine" --test-threads=1 || status=1
 echo; echo "== the gate matrix, as root"
-run "$AREA/bin/gate" --ignored --test-threads=1 --nocapture || status=1
+run osreflog-gate-matrix "$AREA/bin/gate" --ignored --test-threads=1 --nocapture || status=1
 echo
 if [ "$(find "$AREA/outside" -type f | wc -l)" -ne 0 ]; then
     echo "FAIL: files appeared outside the scratch root:"; find "$AREA/outside" -type f
