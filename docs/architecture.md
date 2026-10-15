@@ -91,7 +91,9 @@ btrfs top level (subvolid=5, never mounted in the user's namespace)
 
 Checkpoint cost (P1): 53–173 ms on an idle system, 0.4–0.9 s from the dnf pre-transaction hook, and **5.3 s right after a 435 MiB transaction**, because btrfs flushes the transaction's dirty data first. The post-transaction checkpoint runs after rpm has finished, so it delays dnf's exit but never the package writes.
 
-**Noise filter.** Even a one-package transaction touched 273 paths under `/var` (dnf caches, logs, the rpm database). The cause view hides `/var/cache`, `/var/log` and package-database files by default; the state record keeps everything, and `--all` shows it.
+**Noise filter.** Even a one-package transaction touched 273 paths under `/var` (dnf caches, logs, the rpm database). Views hide package-owned paths, `/var/cache`, `/var/log`, the package databases, and files whose only change is their times (`relatime` access-time updates) by default; the state record keeps everything, and `--all` shows it.
+
+**dnf transactions per interval** are those in the newer snapshot's history that the older snapshot's history doesn't already show as finished. dnf records whole seconds, which can't separate a transaction from a checkpoint taken in the same second; the two histories can. When the older snapshot was pruned, a time window decides.
 
 Retention (defaults, configurable): keep every checkpoint for 48 h, daily for 14 days, weekly for 8 weeks, plus pinned ones (`boot-ok` linked to a bisect, user-pinned). The ledger is kept forever (it's small); blobs are pruned once no remaining checkpoint or cause needs them.
 
@@ -128,7 +130,7 @@ See [undo.md](./undo.md). It's a 3-way check (ledger "before", ledger "after", c
 
 - **D-Bus** system service `io.github.khaledsaeed18.osreflog` (zbus). Read methods (log, show, diff) are allowed for members of the `osreflog` group or via polkit `…read`. Mutating methods (`Checkpoint`, `Undo`, `Bisect*`) require polkit `…admin` (auth_admin_keep). See [ADR 0008](./decisions/0008-dbus-polkit.md).
 - **CLI** is a thin D-Bus client with git-like porcelain; `--json` on every read command.
-- **dnf5 hook**: an actions file in `/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions` calls `osreflog hook pre-transaction ${pid}` / `post-transaction ${pid}`. P1 verified that both `dnf` and `packagekitd` (GNOME Software's PackageKit path) wait for the pre hook before rpm writes anything. GNOME Software's offline updates go through dnf5daemon-server and are applied at boot; until that path is tested (P2), they show up as `offline` causes from the boot-time diff.
+- **dnf5 hook**: an actions file in `/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions` calls `osreflog hook pre ${pid}` / `osreflog hook post ${pid}` (`enabled=host-only`, so `--installroot` transactions are skipped). In the plugin's plain mode every stdout line of the hook is a command (`stop=<msg>` would abort the transaction), so the hook prints only `log.INFO=`/`log.WARNING=` lines, never fails, and gives up after 120 s. P1 verified that both `dnf` and `packagekitd` (GNOME Software's PackageKit path) wait for the pre hook before rpm writes anything. GNOME Software's offline updates go through dnf5daemon-server and are applied at boot; until that path is tested (P2), they show up as `offline` causes from the boot-time diff.
 
 ## Repo layout (planned)
 

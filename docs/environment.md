@@ -27,6 +27,7 @@ Facts about the development host, collected 2026-10-14 and updated after P1 (202
 | Network | ~60–125 KiB/s in P1; one Fedora mirror stalled under 1 KB/s | install tooling with `--setopt=install_weak_deps=False`; avoid large downloads in scripts |
 | Quotas | btrfs quotas **not enabled** | space accounting can't rely on qgroups (Q3) |
 | User | in `wheel`, `docker` | polkit admin auth works via wheel |
+| osreflog (dev install, P2) | `osreflogd` running from `/usr/local/libexec/osreflog/`, CLI in `/usr/local/bin`, dnf hook active since 2026-10-15; snapshots and ledger under `osreflog/` at the btrfs top level | every dnf/PackageKit transaction on this machine is now bracketed by checkpoints; `sudo scripts/install-dev.sh --uninstall` removes it and keeps the history |
 
 ## Expected friction
 
