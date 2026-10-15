@@ -637,6 +637,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "osreflog-bisect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "osreflog-btrfs"
 version = "0.1.0"
 dependencies = [

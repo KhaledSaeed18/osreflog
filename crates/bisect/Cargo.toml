@@ -1,0 +1,15 @@
+[package]
+name = "osreflog-bisect"
+description = "osreflog's bisect, the pure part: the search, one probe at a time, and the replay plan for the state after a cause."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true
