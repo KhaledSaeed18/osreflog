@@ -132,6 +132,7 @@ fn actor_of(p: &Proc, command: Vec<String>) -> Actor {
         uid: p.uid,
         cgroup: p.cgroup.clone(),
         command,
+        via: None,
     }
 }
 

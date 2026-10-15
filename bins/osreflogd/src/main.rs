@@ -108,6 +108,14 @@ async fn serve(engine: Arc<Engine>, session_bus: bool) -> anyhow::Result<()> {
         )
         .await
         .context("exporting the interface")?;
+    {
+        let live = Arc::clone(&engine.live);
+        tokio::spawn(async move {
+            if let Err(e) = osreflogd::delegation::run(live).await {
+                tracing::error!("D-Bus caller attribution unavailable: {e}");
+            }
+        });
+    }
     connection
         .request_name(bus::NAME)
         .await

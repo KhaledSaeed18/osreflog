@@ -70,6 +70,12 @@ pub fn status(s: &Status) {
             "live       watching: {} events, {} changes recorded, {} out of scope, {} open causes, {} processes known",
             l.events, l.recorded, l.out_of_scope, l.open_causes, l.processes
         );
+        if l.delegated > 0 {
+            println!(
+                "           {} causes credited to the D-Bus caller instead of the daemon",
+                l.delegated
+            );
+        }
         if l.overflows > 0 || l.ring_drops > 0 || l.unresolved > 0 {
             println!(
                 "           {} queue overflows, {} lineage drops, {} unresolved",
@@ -287,6 +293,9 @@ pub fn show(d: &CauseDetail) {
     if !c.actor.command.is_empty() {
         println!("  command  {}", c.actor.command.join(" "));
     }
+    if let Some(via) = &c.actor.via {
+        println!("  via      {via}");
+    }
     println!(
         "  window   {} .. {}",
         local(c.started_ms),
@@ -314,6 +323,9 @@ pub fn why(path: &str, entries: &[WhyEntry]) {
         }
         println!("{}", live_line(&e.change).trim_start());
         println!("  by #{} {}: {}", e.cause.id, e.cause.kind, e.cause.label);
+        if let Some(via) = &e.cause.actor.via {
+            println!("  via {via}");
+        }
         match &e.change.actor {
             Some(actor) => println!("  process {actor}"),
             None => println!("  actor {}", actor_line(&e.cause.actor)),

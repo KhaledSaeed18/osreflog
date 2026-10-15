@@ -46,6 +46,19 @@ shadow = json.load(open(f"{R}/why-shadow.json"))
 check("/etc/shadow: seen, content never kept", bool(shadow) and not any(e.get("after") or e.get("before") or e["change"].get("blob") for e in shadow), json.dumps(shadow)[:200])
 nm = json.load(open(f"{R}/why-nm.json"))
 check("NetworkManager keyfile: seen, content never kept", bool(nm) and not any(e.get("after") or e["change"].get("blob") for e in nm), json.dumps(nm)[:200])
+delegated = {
+    "/etc/localtime": "timedatectl",
+    "/etc/machine-info": "hostnamectl",
+    "/etc/tuned/active_profile": "tuned-adm",
+    "/etc/firewalld/zones/osreflogwl.xml": "firewall-cmd",
+    "/etc/NetworkManager/system-connections/osreflog-workload.nmconnection": "nmcli",
+}
+apply = {c["path"]: c for c in json.load(open(f"{R}/diff-apply.json"))["changes"]}
+for path, tool in delegated.items():
+    cause = (apply.get(path) or {}).get("cause") or {}
+    check(f"{tool}: credited to the caller, not the daemon", cause.get("kind") == "command", json.dumps(cause))
+wants = [p for p in apply if p.startswith("/etc/systemd/system/multi-user.target.wants/osreflog-workload")]
+check("systemctl enable: credited to the caller", bool(wants) and (apply[wants[0]].get("cause") or {}).get("kind") == "command", json.dumps(apply[wants[0]].get("cause")) if wants else "no symlink")
 net = json.load(open(f"{R}/diff-net.json"))
 left = [c["path"] for c in net["changes"] if c["class"] == "config" and not times_only(c)]
 print(f"  info {len(left)} config paths differ between start and reverted (rewritten in place, or left by a tool): {left[:12]}")

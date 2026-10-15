@@ -25,6 +25,7 @@ use rustix::event::{PollFd, PollFlags, poll};
 
 use crate::blobs::Blobs;
 use crate::causes::{self, Brackets, Builder, OpenCause};
+use crate::delegation::Calls;
 use crate::engine::{Engine, now_ms};
 use crate::lineage::{Lineage, ProcTable};
 
@@ -43,9 +44,15 @@ pub struct LiveState {
     pub running: AtomicBool,
     pub stop: AtomicBool,
     pub stats: Mutex<LiveStatus>,
+    /// Recent D-Bus method calls, to credit a daemon's writes to the caller.
+    pub calls: Mutex<Calls>,
 }
 
 impl LiveState {
+    pub fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
+        self.calls.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn lock_brackets(&self) -> std::sync::MutexGuard<'_, Brackets> {
         self.brackets.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -273,11 +280,41 @@ impl Capture {
         self.live.stats().recorded += 1;
     }
 
+    /// Credits a daemon's cause to the client that asked it over D-Bus, if one did.
+    fn credit_caller(&mut self, c: &mut OpenCause, brackets: &Brackets) {
+        if !matches!(c.cause.kind.as_str(), "unit" | "unknown") {
+            return;
+        }
+        let call = self
+            .live
+            .calls()
+            .explaining(c.cause.actor.pid, c.cause.started_ms, c.cause.ended_ms)
+            .cloned();
+        let Some(call) = call else { return };
+        if self.table.chain(call.client_pid).is_empty()
+            && let Some(p) = ProcTable::read_proc(call.client_pid)
+        {
+            self.table.insert(p);
+        }
+        let chain = self.table.chain(call.client_pid);
+        if chain.is_empty() {
+            return;
+        }
+        let client = causes::classify(&chain, brackets);
+        let via = format!("{} ({})", c.cause.label, call.method);
+        client.kind.clone_into(&mut c.cause.kind);
+        c.cause.label = client.label;
+        c.cause.actor = client.actor;
+        c.cause.actor.via = Some(via);
+        self.live.stats().delegated += 1;
+    }
+
     fn tick(&mut self, now: Instant) {
-        let closed = {
-            let brackets = self.live.lock_brackets().clone();
-            self.builder.take_closed(now, &brackets)
-        };
+        let brackets = self.live.lock_brackets().clone();
+        let mut closed = self.builder.take_closed(now, &brackets);
+        for c in &mut closed {
+            self.credit_caller(c, &brackets);
+        }
         if !closed.is_empty() {
             let finished: Vec<u32> = closed
                 .iter()
@@ -311,6 +348,7 @@ impl Capture {
 
     fn housekeeping(&mut self, now: Instant) {
         self.table.gc(now);
+        self.live.calls().gc(now_ms());
         let drops = self.lineage.drops();
         if drops > self.ring_drops_seen {
             let ts = now_ms();
