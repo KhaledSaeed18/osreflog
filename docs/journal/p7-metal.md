@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate in progress** (G1–G3 done)
+- Status: **boot gate in progress** (G1–G4 done)
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -117,3 +117,20 @@ Findings:
 | 3, default | the file is not in the real `/home` (it is in p2-home); boot record read from the clone (`probe=2`, kernel 7.2.9); default verified; disarmed; both subvolumes deleted |
 
 The host side now reports `ok   g3-step.sh` (the `$LINES` fix from G2 confirmed).
+
+### 2026-10-16: G4, the boot doctor
+
+`osreflogd --boot-doctor [--dry-run]` (`bins/osreflogd/src/bootdoctor.rs`, 7 tests), run by `osreflog-boot-doctor.service` at every boot of the default system (`ConditionKernelCommandLine=!osreflog.probe`, `Before=osreflogd.service`, `PrivateMounts=yes`, only `/boot` writable) and by `sudo osreflog doctor --boot [--dry-run]`:
+1. **`/boot` is always cleaned**: the probe entry, `/boot/osreflog/`, and a `next_entry` naming the probe. On the default system a probe is either done or didn't boot; either way nothing should boot it again unasked. Someone else's `next_entry` is reported and left.
+2. **The default entry** is checked against the record taken when the probe was armed, or, with nothing pending, checked to be one fixed entry. A difference is a problem (exit 1, in the journal).
+3. **Clones** in `osreflog/probes/` are deleted unless `pending.json` names them. That file is the contract with the bisect (P7b): it writes `{n, clone, home, record}` before arming and removes it once it has the verdict. An unreadable `pending.json` keeps every clone, since deleting is the one step that can't be undone.
+
+`scripts/p7/g4-step.sh`, with this build installed in the VM:
+
+| Boot | What it showed |
+| ---- | -------------- |
+| 1, default | an orphan clone p9; probe 3 and its home prepared with kernel files in `/boot/osreflog`; armed; `pending.json` written |
+| 2, probe | the boot doctor didn't run (`ConditionResult=no`) |
+| 3, default | the doctor had run at boot (`success`, exit 0): removed the probe entry and 2 kernel files; default untouched since probe 3 was armed; "probe 3 booted (kernel 7.2.9…)"; removed p9, kept p3 and p3-home. Then by hand: probe 3 re-armed, `--dry-run` changed nothing; the real run disarmed it ("did not boot, next_entry still set"); with `pending.json` gone, p3 and p3-home were deleted |
+
+Found on the way: `osreflog doctor --boot` first ran the doctor through `systemd-run --pipe --wait`, and from a service that failed with "Failed to start transient service unit: Connection reset by peer", P6's finding #1 again. As root, systemd-run talks to systemd's private socket, and that connection is reset when the caller is a service. The CLI now runs the doctor under `unshare --mount --propagation private` (it refuses a mount that would propagate either way); the boot-time unit keeps the full sandbox. `testvm.sh flow` now starts from a clean VM (no probe entry, `next_entry`, test state or clones left by an earlier run that stopped half-way).

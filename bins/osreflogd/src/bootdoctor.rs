@@ -71,6 +71,58 @@ fn is_name(s: &str) -> bool {
     !s.is_empty() && !s.contains('/') && !s.starts_with('.')
 }
 
+/// Step 1: everything osreflog left on `/boot` goes, whatever the bisect's state.
+fn clean_boot(boot: &Boot, dry_run: bool, r: &mut Report) {
+    let would = if dry_run { "would remove" } else { "removed" };
+    match boot.leftovers() {
+        Ok(left) => {
+            if left.next_entry.as_deref() == Some(osreflog_boot::PROBE_ID) {
+                r.say(format!(
+                    "the armed probe did not boot (next_entry still set): {}",
+                    if dry_run {
+                        "would disarm it"
+                    } else {
+                        "disarming"
+                    }
+                ));
+            } else if let Some(other) = &left.next_entry {
+                r.say(format!("next_entry={other} is not osreflog's: left alone"));
+            }
+            if left.entry
+                || !left.files.is_empty()
+                || left.next_entry.as_deref() == Some(osreflog_boot::PROBE_ID)
+            {
+                // "the probe entry and 2 kernel files", naming only what is there.
+                let mut what = Vec::new();
+                if left.entry {
+                    what.push("the probe entry".to_owned());
+                }
+                if !left.files.is_empty() {
+                    what.push(format!(
+                        "{} kernel file(s) in /boot/osreflog",
+                        left.files.len()
+                    ));
+                }
+                if left.next_entry.as_deref() == Some(osreflog_boot::PROBE_ID) {
+                    what.push("next_entry".to_owned());
+                }
+                let what = what.join(", ");
+                if dry_run {
+                    r.say(format!("{would} {what}"));
+                } else {
+                    match boot.disarm() {
+                        Ok(_) => r.say(format!("{would} {what}")),
+                        Err(e) => r.problem(format!("cleaning /boot: {e}")),
+                    }
+                }
+            } else {
+                r.say("/boot: nothing of osreflog's");
+            }
+        }
+        Err(e) => r.problem(format!("reading /boot: {e}")),
+    }
+}
+
 /// The check itself, on `boot` and the probes directory `probes` (inside the top-level mount).
 /// `delete` removes a subvolume `name` in `probes`. With `dry_run`, it only says what it would
 /// do.
@@ -83,42 +135,7 @@ pub fn check(
     let mut r = Report::default();
     let would = if dry_run { "would remove" } else { "removed" };
 
-    // 1. /boot.
-    match boot.leftovers() {
-        Ok(left) => {
-            if left.next_entry.as_deref() == Some(osreflog_boot::PROBE_ID) {
-                r.say("the armed probe did not boot (next_entry still set): disarming");
-            } else if let Some(other) = &left.next_entry {
-                r.say(format!("next_entry={other} is not osreflog's: left alone"));
-            }
-            if left.entry
-                || !left.files.is_empty()
-                || left.next_entry.as_deref() == Some(osreflog_boot::PROBE_ID)
-            {
-                let files: Vec<String> =
-                    left.files.iter().map(|f| f.display().to_string()).collect();
-                if dry_run {
-                    r.say(format!(
-                        "{would} the probe entry ({}) and {} kernel file(s) {}",
-                        left.entry,
-                        files.len(),
-                        files.join(" ")
-                    ));
-                } else {
-                    match boot.disarm() {
-                        Ok(_) => r.say(format!(
-                            "{would} the probe entry and {} kernel file(s)",
-                            files.len()
-                        )),
-                        Err(e) => r.problem(format!("cleaning /boot: {e}")),
-                    }
-                }
-            } else {
-                r.say("/boot: nothing of osreflog's");
-            }
-        }
-        Err(e) => r.problem(format!("reading /boot: {e}")),
-    }
+    clean_boot(boot, dry_run, &mut r);
 
     // 2. The default entry.
     let pending = pending(probes);
