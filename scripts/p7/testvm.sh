@@ -158,10 +158,12 @@ EOF
     dracut -q -f --hostonly --no-hostonly-cmdline --omit plymouth \
         --add-drivers "virtio_blk virtio_pci" --kver "$kver" "$R/boot/initramfs-$kver.img"
     rsync -a --exclude=grubenv /boot/grub2/ "$R/boot/grub2/"
-    local host_root host_boot
+    local host_root host_boot host_esp
     host_root=$(findmnt -no UUID /)
     host_boot=$(findmnt -no UUID /boot)
-    sed -i -e "s/$host_root/$root_uuid/g" -e "s/$host_boot/$boot_uuid/g" "$R/boot/grub2/grub.cfg"
+    host_esp=$(findmnt -no UUID /boot/efi)
+    sed -i -e "s/$host_root/$root_uuid/g" -e "s/$host_boot/$boot_uuid/g" \
+        -e "s/$host_esp/$esp_uuid/g" "$R/boot/grub2/grub.cfg"
     local mid entry
     mid=$(cat "$R/etc/machine-id")
     entry=$mid-$kver

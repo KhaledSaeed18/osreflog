@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **pre-flight** (nothing built yet)
+- Status: **boot gate in progress** (G1 done)
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -51,7 +51,27 @@ Checked before writing any code, as an ordinary user (no sudo in the session).
 | **P7c** auto | `--tier auto` with `--needs kernel\|hardware` |
 | **P7d** exit | seeded Wi-Fi powersave regression bisected on the laptop |
 
-## Decisions needed before G1
+## Decisions (2026-10-15)
 
-- **Test VM disk:** built from a checkpoint of this machine (no download, same GRUB/shim/BLS and the same osreflog install, but it carries this machine's `/etc` secrets inside a local image), or the Fedora 44 Cloud Base image (~500 MB, roughly 1–2 h at P1's measured bandwidth, a different layout). Proposed: from a checkpoint, with the image kept under `osreflog/` and deleted at the end of the gate.
-- **`/home` in a metal probe:** a throwaway writable snapshot of `home` (proposed), or the real `/home`.
+The owner took both proposals:
+- **Test VM disk:** built from a checkpoint of this machine, kept in its own subvolume `osreflog/testvm` at the top level and deleted at the end of the gate. Wi-Fi/VPN profiles and SSH host keys are left out of the copy; the rest of `/etc` goes in.
+- **`/home` in a metal probe:** a throwaway writable snapshot of `home`, deleted with the probe.
+
+## Log
+
+### 2026-10-15: G1, the test VM
+
+`scripts/p7/testvm.sh build | check | run | log | delete`. The image is a sparse raw GPT disk in a no-CoW subvolume: an ESP with this machine's shim and GRUB, an ext4 `/boot` with one Fedora-signed kernel, a host-only initramfs plus `virtio_blk virtio_pci`, the host's GRUB config with the image's UUIDs and one BLS entry, and a btrfs with `root` (rsync `-aHAXS` from the checkpoint, so SELinux labels, ACLs and file capabilities survive) and an empty `home`. Booted by QEMU with `OVMF_CODE.secboot.fd`, SMM, the Secure Boot variable store, `-nic none`, 1536 MiB.
+
+| | |
+| - | - |
+| Source | checkpoint c000105, kernel 7.2.9-200.fc44 |
+| Copy | 7.4 GiB in 368 s (Docker, Flatpak, libvirt images, caches, journals left out); image 7.6 GiB of a 40 GiB sparse file |
+| Boot | shim → GRUB menu (5 s, visible on the serial console) → kernel; `Startup finished in 1.3 s (kernel) + 2.6 s (initrd) + 9.5 s (userspace) = 13.4 s`; report 24 s after QEMU started |
+| In the VM | Secure Boot enabled, lockdown `integrity`, SELinux enforcing (no relabel needed), `/` = `vda3[/root]`, `/boot` ext4, `/boot/efi` vfat, `/home` = `vda3[/home]`, state `running` with **0 failed units**, osreflogd active |
+| grubenv | `saved_entry=<machine-id>-7.2.9…`; Fedora's `grub-boot-indeterminate.service` wrote `boot_indeterminate=0`, so the guest writes `/boot/grub2/grubenv` as the laptop does |
+| Memory | qemu peak RSS 977–1170 MiB for a 1536 MiB guest |
+
+The first `check` lost its report: the console prefixes each line (`[ 13.37] osreflog-testvm-check[1097]: TESTVM …`), the script matched at `^`, `pipefail` ended it silently, and qemu was left running. The check now matches anywhere, kills qemu on any exit and prints the serial log's tail on a failure. GRUB also logged `no such device: F034-AABF`: the host's grub.cfg names the ESP's UUID as well; the next build replaces it too.
+
+The menu staying visible matters for G5: a "hung probe" is simulated by stopping there and resetting.
