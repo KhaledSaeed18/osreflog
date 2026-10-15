@@ -162,6 +162,15 @@ pub struct Change {
     pub witness: Option<String>,
 }
 
+impl Change {
+    /// Only the times changed: mostly `relatime` access-time updates on files that were read
+    /// or run. No fanotify event marks them, and they aren't changes worth explaining.
+    #[must_use]
+    pub fn times_only(&self) -> bool {
+        self.op == "modify" && self.what.len() == 1 && self.what[0] == "times"
+    }
+}
+
 /// The process a cause is about.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
@@ -402,7 +411,10 @@ mod tests {
         assert_eq!(classify("/usr/bin/bash"), Class::Package);
         assert_eq!(classify("/usr/lib/sysimage/rpm/rpmdb.sqlite"), Class::Noise);
         assert_eq!(classify("/var/log/messages"), Class::Noise);
-        assert_eq!(classify("/var/lib/NetworkManager/NetworkManager.state"), Class::State);
+        assert_eq!(
+            classify("/var/lib/NetworkManager/NetworkManager.state"),
+            Class::State
+        );
         assert_eq!(classify("/var/lib/NetworkManager/timestamps"), Class::Noise);
         assert_eq!(classify("/var/lib/rsyslog/imjournal.state"), Class::Noise);
         assert_eq!(classify("/variable"), Class::Other);

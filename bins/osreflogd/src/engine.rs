@@ -723,8 +723,7 @@ impl Engine {
         for c in changes.iter_mut() {
             // Times-only changes are mostly atime updates, which raise no fanotify event: no
             // witness could see them, and they aren't changes worth explaining.
-            let times_only = c.op == "modify" && c.what.len() == 1 && c.what[0] == "times";
-            if c.class == Class::Noise || times_only {
+            if c.class == Class::Noise || c.times_only() {
                 continue;
             }
             let (cause, witness) = match by_path
@@ -857,8 +856,15 @@ impl Engine {
             } else {
                 text(&change.blob)
             };
-            let previous = lock(&self.ledger).previous_blob(&change.path, change.ts_ms)?;
+            // A created path has no "before", even if an earlier file of that name existed and
+            // was deleted (its content belongs to that earlier file's history).
+            let previous = if change.op == "create" {
+                None
+            } else {
+                lock(&self.ledger).previous_blob(&change.path, change.ts_ms)?
+            };
             let before = match previous {
+                None if change.op == "create" => None,
                 Some(h) => text(&Some(h)),
                 None => checkpoints
                     .iter()
@@ -892,8 +898,7 @@ const ATTRIBUTION_SLACK_MS: i64 = 2000;
 /// Package-owned and noise paths are hidden by default, and so are files whose only change is
 /// their times (mostly `relatime` access-time updates on files that were read or run).
 fn shown_by_default(c: &Change) -> bool {
-    let times_only = c.op == "modify" && c.what.len() == 1 && c.what[0] == "times";
-    !matches!(c.class, Class::Package | Class::Noise) && !times_only
+    !matches!(c.class, Class::Package | Class::Noise) && !c.times_only()
 }
 
 fn report(
@@ -909,7 +914,7 @@ fn report(
     let mut live = false;
     for c in &iv.changes {
         counts.add(c.class);
-        if c.witness.is_some() && c.class != Class::Noise {
+        if c.witness.is_some() && c.class != Class::Noise && !c.times_only() {
             live = true;
             coverage.all += 1;
             coverage.all_attributed += u64::from(c.cause.is_some());
