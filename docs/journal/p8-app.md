@@ -1,6 +1,6 @@
 # P8: GNOME app, packaging, hardening
 
-- Status: **P8a done**; P8b next
+- Status: **P8a done; P8b built** (needs a click-through on the real desktop)
 - Started: 2026-10-16
 - Roadmap: [P8](../roadmap.md#p8-gnome-app-packaging-hardening)
 - Exit: installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
@@ -69,3 +69,12 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - **Seen running against the real daemon** (GTK's Broadway backend, viewed in a browser): today's causes listed; #751 `uresourced.service` with its D-Bus caller (`systemd … SetUnitProperties`) and 8 changed files; #752, the `dnf install` of the GTK headers, with 31,422 package files counted and its one live change (`/etc/ld.so.cache` by `ldconfig`). With `systemctl stop osreflogd` the timeline gave way to "osreflog isn't running" within a refresh; with `start` it came back by itself, a new cause (systemd, from the restart) already at the top.
 
 **P8a exit met.** Rough edges for later slices: long commands wrap to three lines in the timeline; the status line is cut off in a narrow sidebar; no search or filter yet.
+
+### 2026-10-16: P8b, "what changed since…"
+
+- The sidebar has two views (an `AdwViewSwitcher`): **Causes** and **Checkpoints**. The checkpoint list (from `Log`, 300 newest) is grouped by day; each row has the reason (boot, pre-/post-dnf, manual, pre-undo), the note or the package manager, and what changed in the interval before it ("before it: 77 config · 1848 state · … · dnf #52").
+- Selecting a checkpoint asks `Diff(cN, @{now})` and shows "Comparing cN with now…" while it runs (4 s for a busy interval). The diff page: an **Until** choice (now, or any newer checkpoint, so any two can be compared); **Include package files and noise** (`all`); the facts (from, to, counts, how much the live witness explains, package transactions, every window osreflogd wasn't watching); the package changes; then the files by class (configuration, state, elsewhere, then package files and noise when asked), each with its summary lines and, when a cause made it, a button to that cause. At most 400 files per group are listed; the rest are counted.
+- A reply for anything but the current selection is dropped, so a slow diff can't overwrite a cause picked meanwhile.
+- **Found on the way:** libadwaita rows parsed a command's `&&` as markup ("Entity did not end with a semicolon"), whichever order the builder was given `use-markup` and the text. Rows are now made with setters in a fixed order (`set_use_markup(false)`, then the text): 0 warnings on a diff of 74 config files and on a cause whose command has `&&`, and the text shows as written.
+- `view.rs` gained the checkpoint rows, the diff facts, the package lines and the file groups: 5 tests.
+- **Seen against the real daemon**: c000134 → now: 74 config · 2 state · 11,966 package · 171 noise; "28/28 config changes, 9816/9816 overall have a recorded cause"; dnf #53; the two windows osreflogd wasn't watching today; 68 packages. GTK's Broadway backend drops clicks and scrolls, so the page was opened with `OSREFLOG_APP_OPEN=since:c000134` (a development hook, also `cause:<id>`). Still to see on the real desktop: the Until choice, the switch, the cause buttons, scrolling a long diff.

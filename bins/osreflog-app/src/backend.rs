@@ -3,17 +3,22 @@
 //! the GTK main loop reads.
 
 use osreflog_client::{Client, ClientError};
-use osreflog_model::{Cause, CauseDetail, Status};
+use osreflog_model::{Cause, CauseDetail, DiffReport, LogEntry, Status};
 
 /// How many causes the timeline asks for.
 pub const LIMIT: u32 = 500;
+/// How many checkpoints the checkpoint list asks for.
+pub const CHECKPOINTS: u32 = 300;
 
 #[derive(Debug)]
 pub enum Request {
-    /// The status and the newest causes.
+    /// The status, the newest causes and the newest checkpoints.
     Refresh,
     /// One cause with its changes.
     Show(i64),
+    /// What changed from one checkpoint to another (`@{now}`: the live system). `all`: package
+    /// files and noise too.
+    Diff { from: String, to: String, all: bool },
 }
 
 /// Why a call has no answer: the daemon isn't there, or something else went wrong.
@@ -32,10 +37,19 @@ impl From<ClientError> for Failure {
     }
 }
 
+/// The status, the timeline's causes and the checkpoint list.
+pub type History = (Status, Vec<Cause>, Vec<LogEntry>);
+
 #[derive(Debug)]
 pub enum Reply {
-    History(Result<(Status, Vec<Cause>), Failure>),
+    History(Result<History, Failure>),
     Detail(i64, Result<CauseDetail, Failure>),
+    Diff {
+        from: String,
+        to: String,
+        all: bool,
+        result: Result<Box<DiffReport>, Failure>,
+    },
 }
 
 /// Starts the thread. Requests go in through the first channel, replies come out of the second.
@@ -63,6 +77,21 @@ pub fn spawn() -> (
     (req_tx, rep_rx)
 }
 
+fn unreachable_bus() -> Failure {
+    Failure {
+        down: true,
+        message: "the system bus isn't reachable".into(),
+    }
+}
+
+async fn history(c: &Client) -> Result<History, ClientError> {
+    Ok((
+        c.status().await?,
+        c.causes(LIMIT).await?,
+        c.log(CHECKPOINTS).await?,
+    ))
+}
+
 async fn serve(requests: async_channel::Receiver<Request>, replies: async_channel::Sender<Reply>) {
     let mut client: Option<Client> = None;
     while let Ok(req) = requests.recv().await {
@@ -72,27 +101,38 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             client = Client::connect(false).await.ok();
         }
         let reply = match (&client, req) {
-            (None, Request::Refresh) => Reply::History(Err(Failure {
-                down: true,
-                message: "the system bus isn't reachable".into(),
-            })),
-            (None, Request::Show(id)) => Reply::Detail(
-                id,
-                Err(Failure {
-                    down: true,
-                    message: "the system bus isn't reachable".into(),
-                }),
-            ),
-            (Some(c), Request::Refresh) => {
-                let history =
-                    async { Ok::<_, ClientError>((c.status().await?, c.causes(LIMIT).await?)) };
-                Reply::History(history.await.map_err(Failure::from))
-            }
+            (None, Request::Refresh) => Reply::History(Err(unreachable_bus())),
+            (None, Request::Show(id)) => Reply::Detail(id, Err(unreachable_bus())),
+            (None, Request::Diff { from, to, all }) => Reply::Diff {
+                from,
+                to,
+                all,
+                result: Err(unreachable_bus()),
+            },
+            (Some(c), Request::Refresh) => Reply::History(history(c).await.map_err(Failure::from)),
             (Some(c), Request::Show(id)) => {
                 Reply::Detail(id, c.show(id).await.map_err(Failure::from))
             }
+            (Some(c), Request::Diff { from, to, all }) => {
+                let result = c
+                    .diff(&from, &to, all)
+                    .await
+                    .map(Box::new)
+                    .map_err(Failure::from);
+                Reply::Diff {
+                    from,
+                    to,
+                    all,
+                    result,
+                }
+            }
         };
-        if matches!(&reply, Reply::History(Err(_)) | Reply::Detail(_, Err(_))) {
+        let failed = match &reply {
+            Reply::History(r) => r.as_ref().err(),
+            Reply::Detail(_, r) => r.as_ref().err(),
+            Reply::Diff { result, .. } => result.as_ref().err(),
+        };
+        if failed.is_some_and(|f| f.down) {
             client = None;
         }
         if replies.send(reply).await.is_err() {

@@ -3,7 +3,10 @@
 
 use std::fmt::Write as _;
 
-use osreflog_model::{Cause, CauseDetail, LiveChange, Status};
+use osreflog_model::{
+    Cause, CauseDetail, Change, Class, ClassCounts, DiffReport, Endpoint, LiveChange, LogEntry,
+    Status,
+};
 
 /// One cause in the timeline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +199,227 @@ pub fn status_line(s: &Status, local: impl Fn(i64) -> String) -> String {
     }
 }
 
+/// "86 config · 33 state · 12267 package", leaving out classes with nothing in them.
+#[must_use]
+pub fn counts_line(c: &ClassCounts) -> String {
+    let parts: Vec<String> = [
+        (c.config, "config"),
+        (c.state, "state"),
+        (c.package, "package"),
+        (c.other, "other"),
+        (c.noise, "noise"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, what)| format!("{n} {what}"))
+    .collect();
+    if parts.is_empty() {
+        "no changes".to_owned()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// A symbolic icon for why a checkpoint was taken.
+#[must_use]
+pub fn reason_icon(reason: &str) -> &'static str {
+    match reason {
+        "boot" => "system-reboot-symbolic",
+        "pre-dnf" | "post-dnf" => "system-software-install-symbolic",
+        "manual" => "bookmark-new-symbolic",
+        "pre-undo" => "edit-undo-symbolic",
+        _ => "document-save-symbolic",
+    }
+}
+
+/// A checkpoint in the list: what it is and what changed in the interval before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckpointRow {
+    pub name: String,
+    pub time: String,
+    pub title: String,
+    pub subtitle: String,
+    pub icon: &'static str,
+}
+
+/// Checkpoints (newest first) grouped by local day, as [`days`] does for causes.
+pub fn checkpoint_days(
+    entries: &[LogEntry],
+    local: impl Fn(i64) -> (String, String),
+    today: &str,
+    yesterday: &str,
+) -> Vec<(String, Vec<CheckpointRow>)> {
+    let mut out: Vec<(String, String, Vec<CheckpointRow>)> = Vec::new();
+    for e in entries {
+        let c = &e.checkpoint;
+        let (day, time) = local(c.created_ms);
+        let mut title = format!("{}  {}", c.name, c.reason);
+        if let Some(note) = c.note.as_deref().filter(|n| !n.is_empty()) {
+            let _ = write!(title, " · {note}");
+        } else if let Some(pm) = &c.pm_comm {
+            let _ = write!(title, " · {pm}");
+        }
+        let subtitle = match &e.interval {
+            Some(iv) => {
+                let mut s = format!("before it: {}", counts_line(&iv.counts));
+                for t in &iv.transactions {
+                    let _ = write!(s, " · dnf #{}", t.id);
+                }
+                s
+            }
+            None if c.pruned_ms.is_some() => "snapshot pruned".to_owned(),
+            None => "no diff yet".to_owned(),
+        };
+        let row = CheckpointRow {
+            name: c.name.clone(),
+            time,
+            title,
+            subtitle,
+            icon: reason_icon(&c.reason),
+        };
+        match out.last_mut() {
+            Some((d, _, rows)) if *d == day => rows.push(row),
+            _ => {
+                let label = if day == today {
+                    "Today".to_owned()
+                } else if day == yesterday {
+                    "Yesterday".to_owned()
+                } else {
+                    day.clone()
+                };
+                out.push((day, label, vec![row]));
+            }
+        }
+    }
+    out.into_iter().map(|(_, l, r)| (l, r)).collect()
+}
+
+/// One side of a diff, as a person reads it.
+#[must_use]
+pub fn endpoint_label(e: &Endpoint, local: impl Fn(i64) -> String) -> String {
+    match e {
+        Endpoint::Checkpoint(c) => format!("{} ({}, {})", c.name, c.reason, local(c.created_ms)),
+        Endpoint::Live { taken_ms } => format!("now ({})", local(*taken_ms)),
+    }
+}
+
+/// The facts above a diff's files, as (label, value) pairs.
+pub fn diff_facts(r: &DiffReport, local: impl Fn(i64) -> String) -> Vec<(&'static str, String)> {
+    let mut f = vec![
+        ("From", endpoint_label(&r.from, &local)),
+        ("To", endpoint_label(&r.to, &local)),
+        ("Changes", counts_line(&r.counts)),
+    ];
+    let cov = &r.coverage;
+    if cov.all > 0 {
+        f.push((
+            "Explained",
+            format!(
+                "{}/{} config changes, {}/{} overall have a recorded cause",
+                cov.config_attributed, cov.config, cov.all_attributed, cov.all
+            ),
+        ));
+    }
+    for t in &r.transactions {
+        f.push((
+            "Package transaction",
+            format!("dnf #{} {}", t.id, t.description),
+        ));
+    }
+    for g in &r.gaps {
+        f.push((
+            "Not watched",
+            format!("{} – {}: {}", local(g.start_ms), local(g.end_ms), g.reason),
+        ));
+    }
+    f
+}
+
+/// A package change: "upgrade firefox 157.0.1-1.fc44 → 158.0-1.fc44".
+#[must_use]
+pub fn package_line(p: &osreflog_model::PackageChange) -> String {
+    match (&p.from_evr, &p.to_evr) {
+        (Some(a), Some(b)) => format!("{} {} {a} → {b}", p.action, p.name),
+        (None, Some(b)) => format!("{} {} {b}", p.action, p.name),
+        (Some(a), None) => format!("{} {} {a}", p.action, p.name),
+        (None, None) => format!("{} {}", p.action, p.name),
+    }
+}
+
+/// A changed file in a diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffRow {
+    pub title: String,
+    pub subtitle: String,
+    /// The cause that made it, when one was recorded: (id, "unit tlp.service").
+    pub cause: Option<(i64, String)>,
+    pub summary: Vec<String>,
+}
+
+fn diff_row(c: &Change) -> DiffRow {
+    let title = match (&c.from, c.op.as_str()) {
+        (Some(from), "rename") => format!("{from} → {}", c.path),
+        _ => c.path.clone(),
+    };
+    let op = match c.op.as_str() {
+        "create" => "created",
+        "modify" => "changed",
+        "delete" => "deleted",
+        "rename" => "renamed",
+        other => other,
+    };
+    let mut subtitle = format!("{op} {}", c.kind);
+    if c.op == "modify" && !c.what.is_empty() {
+        let _ = write!(subtitle, " ({})", c.what.join(", "));
+    }
+    match &c.cause {
+        Some(cause) => {
+            let _ = write!(
+                subtitle,
+                " · by #{} {} {}",
+                cause.id, cause.kind, cause.label
+            );
+        }
+        None if c.witness.as_deref() == Some("state") => {
+            subtitle.push_str(" · no recorded cause");
+        }
+        None => {}
+    }
+    DiffRow {
+        title,
+        subtitle,
+        cause: c
+            .cause
+            .as_ref()
+            .map(|r| (r.id, format!("{} {}", r.kind, r.label))),
+        summary: c.summary.clone(),
+    }
+}
+
+/// A diff's changed files, grouped by class in the order a person cares about.
+#[must_use]
+pub fn diff_groups(r: &DiffReport) -> Vec<(&'static str, Vec<DiffRow>)> {
+    let order = [
+        (Class::Config, "Configuration"),
+        (Class::State, "State"),
+        (Class::Other, "Elsewhere"),
+        (Class::Package, "Package files"),
+        (Class::Noise, "Noise"),
+    ];
+    order
+        .iter()
+        .filter_map(|(class, title)| {
+            let rows: Vec<DiffRow> = r
+                .changes
+                .iter()
+                .filter(|c| c.class == *class)
+                .map(diff_row)
+                .collect();
+            (!rows.is_empty()).then_some((*title, rows))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -296,6 +520,168 @@ mod tests {
         };
         assert_eq!(change_title(&link), "/etc/x → /dev/null");
         assert_eq!(change_subtitle(&link), "created file");
+    }
+
+    fn checkpoint(
+        id: i64,
+        ms: i64,
+        reason: &str,
+        note: Option<&str>,
+    ) -> osreflog_model::Checkpoint {
+        osreflog_model::Checkpoint {
+            id,
+            name: format!("c{id:06}"),
+            created_ms: ms,
+            reason: reason.into(),
+            generation: 1,
+            boot_id: String::new(),
+            note: note.map(str::to_owned),
+            pm_pid: None,
+            pm_comm: None,
+            pinned: false,
+            pruned_ms: None,
+        }
+    }
+
+    #[test]
+    fn checkpoints_read_with_their_interval() {
+        let entries = vec![
+            LogEntry {
+                checkpoint: checkpoint(3, 2200, "post-dnf", None),
+                interval: Some(osreflog_model::IntervalSummary {
+                    from_id: 2,
+                    counts: ClassCounts {
+                        config: 2,
+                        package: 120,
+                        noise: 4,
+                        ..ClassCounts::default()
+                    },
+                    packages: 1,
+                    transactions: vec![osreflog_model::Transaction {
+                        id: 53,
+                        begin: 0,
+                        end: None,
+                        user_id: 1000,
+                        description: "dnf install figlet".into(),
+                        state: "Ok".into(),
+                    }],
+                }),
+            },
+            LogEntry {
+                checkpoint: checkpoint(2, 2100, "manual", Some("before the update")),
+                interval: None,
+            },
+            LogEntry {
+                checkpoint: checkpoint(1, 900, "boot", None),
+                interval: None,
+            },
+        ];
+        let d = checkpoint_days(&entries, local, "d2", "d1");
+        assert_eq!(d.len(), 2);
+        assert_eq!(d[0].0, "Today");
+        assert_eq!(d[0].1[0].title, "c000003  post-dnf");
+        assert_eq!(
+            d[0].1[0].subtitle,
+            "before it: 2 config · 120 package · 4 noise · dnf #53"
+        );
+        assert_eq!(d[0].1[1].title, "c000002  manual · before the update");
+        assert_eq!(d[0].1[1].subtitle, "no diff yet");
+        assert_eq!(d[1].0, "d0");
+        assert_eq!(d[1].1[0].icon, "system-reboot-symbolic");
+        assert_eq!(counts_line(&ClassCounts::default()), "no changes");
+    }
+
+    #[test]
+    fn a_diff_reads_as_facts_and_grouped_files() {
+        let change = |path: &str, class: Class, cause: Option<i64>| Change {
+            path: path.into(),
+            op: "modify".into(),
+            from: None,
+            kind: "file".into(),
+            class,
+            what: vec!["content".into()],
+            bytes: 10,
+            cause: cause.map(|id| osreflog_model::CauseRef {
+                id,
+                kind: "unit".into(),
+                label: "tlp.service".into(),
+            }),
+            witness: Some(if cause.is_some() { "both" } else { "state" }.into()),
+            summary: vec!["wifi.powersave 2 → 3".into()],
+        };
+        let r = DiffReport {
+            from: Endpoint::Checkpoint(checkpoint(1, 1000, "boot", None)),
+            to: Endpoint::Live { taken_ms: 2000 },
+            witnesses: vec!["state".into(), "live".into()],
+            cached: false,
+            compute_ms: 1,
+            stream_bytes: 1,
+            commands: 1,
+            changed_bytes: 1,
+            counts: ClassCounts {
+                config: 1,
+                state: 1,
+                ..ClassCounts::default()
+            },
+            packages: vec![osreflog_model::PackageChange {
+                name: "firefox".into(),
+                arch: "x86_64".into(),
+                action: "upgrade".into(),
+                from_evr: Some("157.0.1-1.fc44".into()),
+                to_evr: Some("158.0-1.fc44".into()),
+            }],
+            transactions: vec![],
+            changes: vec![
+                change("/var/lib/x", Class::State, None),
+                change(
+                    "/etc/NetworkManager/conf.d/wifi.conf",
+                    Class::Config,
+                    Some(7),
+                ),
+            ],
+            hidden: 0,
+            coverage: osreflog_model::Coverage {
+                config: 1,
+                config_attributed: 1,
+                all: 2,
+                all_attributed: 1,
+            },
+            gaps: vec![osreflog_model::Gap {
+                id: 1,
+                start_ms: 1100,
+                end_ms: 1200,
+                reason: "osreflogd was stopped".into(),
+            }],
+        };
+        let f = diff_facts(&r, |ms| format!("t{ms}"));
+        assert_eq!(f[0], ("From", "c000001 (boot, t1000)".into()));
+        assert_eq!(f[1], ("To", "now (t2000)".into()));
+        assert_eq!(
+            f[3].1,
+            "1/1 config changes, 1/2 overall have a recorded cause"
+        );
+        assert_eq!(
+            f[4],
+            ("Not watched", "t1100 – t1200: osreflogd was stopped".into())
+        );
+        assert_eq!(
+            package_line(&r.packages[0]),
+            "upgrade firefox 157.0.1-1.fc44 → 158.0-1.fc44"
+        );
+        let g = diff_groups(&r);
+        assert_eq!(
+            g.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            ["Configuration", "State"]
+        );
+        assert_eq!(
+            g[0].1[0].subtitle,
+            "changed file (content) · by #7 unit tlp.service"
+        );
+        assert_eq!(g[0].1[0].cause, Some((7, "unit tlp.service".into())));
+        assert_eq!(
+            g[1].1[0].subtitle,
+            "changed file (content) · no recorded cause"
+        );
     }
 
     #[test]
