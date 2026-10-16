@@ -301,7 +301,9 @@ pub struct Transaction {
     pub state: String,
 }
 
-/// Counts of changes by class, before filtering.
+/// Counts of changes by class, before filtering. A change of the times alone counts as noise:
+/// they are mostly `relatime` access times on files a boot read (P8 pre-flight: 2,582 "package
+/// changes" between two boots were all of these).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClassCounts {
     pub config: u64,
@@ -320,6 +322,15 @@ impl ClassCounts {
             Class::Noise => self.noise += 1,
             Class::Other => self.other += 1,
         }
+    }
+
+    /// Counts `c` under its class, or as noise when only its times changed.
+    pub fn add_change(&mut self, c: &Change) {
+        self.add(if c.times_only() {
+            Class::Noise
+        } else {
+            c.class
+        });
     }
 
     #[must_use]

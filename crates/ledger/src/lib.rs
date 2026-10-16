@@ -793,7 +793,11 @@ impl Ledger {
         let mut counts = ClassCounts::default();
         let mut stmt = self
             .conn
-            .prepare("SELECT class, COUNT(*) FROM changes WHERE interval_id = ?1 GROUP BY class")?;
+            // A change of the times alone is noise (see `ClassCounts`).
+            .prepare(
+                "SELECT CASE WHEN op = 'modify' AND what = 'times' THEN 'noise' ELSE class END AS c, \
+                 COUNT(*) FROM changes WHERE interval_id = ?1 GROUP BY c",
+            )?;
         let rows = stmt.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
         for row in rows {
             let (class, n) = row?;
@@ -1554,6 +1558,40 @@ mod tests {
         assert_eq!(l.chain_len().unwrap(), 5);
         let v = l.verify().unwrap();
         assert!(v.ok, "{v:?}");
+    }
+
+    #[test]
+    fn times_alone_count_as_noise() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.add_checkpoint(&cp(1, 1000, "boot")).unwrap();
+        l.add_checkpoint(&cp(2, 2000, "boot")).unwrap();
+        let mut iv = interval(1, 2);
+        let base = iv.changes[0].clone();
+        // An access time on a package file (relatime), and a real package file change.
+        iv.changes.push(Change {
+            path: "/usr/bin/Xwayland".into(),
+            class: Class::Package,
+            what: vec!["times".into()],
+            bytes: 0,
+            ..base.clone()
+        });
+        iv.changes.push(Change {
+            path: "/usr/bin/figlet".into(),
+            class: Class::Package,
+            what: vec!["content".into(), "times".into()],
+            ..base
+        });
+        l.store_interval(&iv).unwrap();
+        let s = l.summary_ending_at(2).unwrap().unwrap();
+        assert_eq!(
+            (s.counts.config, s.counts.package, s.counts.noise),
+            (1, 1, 2)
+        );
+        let mut direct = ClassCounts::default();
+        for c in &iv.changes {
+            direct.add_change(c);
+        }
+        assert_eq!(direct, s.counts);
     }
 
     #[test]

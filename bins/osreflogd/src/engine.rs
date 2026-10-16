@@ -1048,7 +1048,7 @@ fn report(
     let mut coverage = Coverage::default();
     let mut live = false;
     for c in &iv.changes {
-        counts.add(c.class);
+        counts.add_change(c);
         if c.witness.is_some() && c.class != Class::Noise && !c.times_only() {
             live = true;
             coverage.all += 1;
