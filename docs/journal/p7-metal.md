@@ -1,9 +1,10 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate passed 2026-10-16; P7a, P7b, P7c done**; P7d (the exit, on the laptop) next
+- Status: **closed**
+- Closed: 2026-10-16
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate-passed-2026-10-16)
-- Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
+- Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end. **Met:** the boot gate passed in a Secure Boot test VM (four probes, a hang and a panic back on the default); a metal bisect on this laptop found the cause that switched Wi-Fi power save on (#680) in 3 probes, the default entry untouched throughout.
 
 ## Pre-flight (2026-10-15)
 
@@ -232,3 +233,23 @@ Everything here is unit-tested; nothing ran as root, so nothing ran in the VM or
 
    VM probes took 14.9–20.8 s against P6's 12.7–14.0 s, with about 1.7 GiB free on the host: still inside P6's 30 s bound.
 4. **P7d, first attempt on the laptop:** seeded (good c000126, bad c000127, power save switched on by #660), then **arming probe 1 was refused**: "the default boot entry changed: $tuned_initrd is missing". This laptop's real BLS entries carry tuned's variables (`initrd … $tuned_initrd`, `options … $tuned_params`), which the test VM's hand-written entry didn't, and the default record took `$tuned_initrd` for a file. The check failed before anything was written, so `/boot` was never touched: the safe way to fail. Fixed: GRUB variables on the initrd line aren't recorded as files, and they stay on the probe's initrd line so GRUB expands them for the probe as for the default; a test models this laptop's entry. `p7d-wifi.sh start` also printed "now: reboot" after the failure; it now stops when no probe is armed.
+5. **P7d on the laptop, by hand** (`scripts/p7/p7d-wifi.sh`, after the `$tuned_initrd` fix): good c000128 (power save off), bad c000129, three causes between them, `wifi.powersave` 2 → 3 in #680. **Found #680** in 3 metal probes, 6 reboots of the laptop:
+
+   | Probe | State | Verdict (`osreflog-p7d-check` in the probe: `iw dev wlp2s0 get power_save`) | Waited |
+   | ----- | ----- | ---------------------------------------------------------------------------- | ------ |
+   | 1 | the bad end, c000129 | bad | 18 min |
+   | 2 | after #679 (1 of 3) | good | 11 min |
+   | 3 | after #680 (2 of 3) | bad | 7 min |
+
+   Every arm reused the installed 7.2.9 kernel (0.8–2.6 s). At each return the boot doctor removed the probe entry, found the default untouched since that probe was armed, and saw the probe's boot record; the daemon read the verdict from the clone and armed the next probe. No approximations. `finish` removed the seeded files and the helper; power save is as it was before.
+
+   One slip, by the person: `osreflog-p7d-check` was once run on the default system before rebooting into probe 3. Nothing was recorded (`osreflog-verdict` exists only inside probes), and the check now refuses outside a probe.
+
+## What changed in the design
+
+- **Arming** is `grub2-editenv … set next_entry`, not `grub2-reboot` (which can rewrite `saved_entry` from a stale `prev_saved_entry`), and is refused unless the default is one fixed entry. GRUB variables on a default's `initrd` line (tuned's `$tuned_initrd`) are kept on the probe's and aren't checked as files.
+- **A probe is a clone with a throwaway home,** its own fstab, osreflogd and the user agent kept out by two unit conditions (a booted container shares the host's kernel command line), the dnf hook removed, and `osreflog-verdict` written in. **It never mounts the ledger:** its boot record and verdict are files in the clone, read once the default boots again.
+- **Only the boot worker writes `/boot`,** in its own transient unit; **the boot doctor** cleans `/boot` and unclaimed clones at every boot of the default.
+- **A bisect session is one resumable state machine** (`TwoLevel`), saved in the ledger for manual sessions, so `bisect start` survives restarts and reboots; `bisect run` uses the same machine. Verdicts by hand work with container probes too.
+- **`--tier auto`** is the default; hardware needs go to `bisect start --tier metal`, since a probe can't judge itself.
+- [bisect.md](../bisect.md), [threat-model.md](../threat-model.md) and [recovery.md](../recovery.md) describe the metal tier as built.

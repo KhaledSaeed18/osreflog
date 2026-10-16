@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P7 (metal bisect) in progress: the boot gate passed 2026-10-16 in a Secure Boot test VM; manual bisects (P7a) work on this machine with container probes, across a daemon restart; a metal bisect (P7b) found the right cause in the test VM in 3 probes and 7 boots, and `--tier auto` (P7c) is in; P7d, a real Wi-Fi regression bisected on this laptop, is next ([journal](./journal/p7-metal.md)). Last updated 2026-10-16.
+**Status:** P8 (GNOME app, packaging, hardening) next; P7 closed 2026-10-16 ([journal](./journal/p7-metal.md)): after the boot gate passed in a Secure Boot test VM, a metal bisect on this laptop found the change that switched Wi-Fi power save on, in 3 probes, the default boot entry untouched throughout. Last updated 2026-10-16.
 
 ## Reading order
 

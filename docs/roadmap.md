@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P7 (metal bisect) next.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P8 (GNOME app, packaging, hardening) next.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed and P7 closed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -99,13 +99,13 @@ Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
 - [x] `osreflog doctor --boot` cleans up leftovers and is run automatically at every boot (`osreflog-boot-doctor.service`)
 - [x] A recovery note in the docs: how to boot the default entry by hand from the GRUB menu ([recovery.md](./recovery.md))
 
-## P7: Metal bisect
+## P7: Metal bisect (closed 2026-10-16)
 - [x] Probe kernel/initramfs preparation, temporary BLS entry, ~~`grub2-reboot`~~ `grub2-editenv set next_entry` one-shot (boot gate, G2)
 - [x] Probe-side oneshot unit and verdict prompt (G3); manual verdicts (`bisect start / good / bad / skip / log`), the session saved in the ledger and resumed (P7a, with container probes)
 - [x] `--tier metal`: arm, reboot, verdict in the probe, reboot, continue (P7b: a metal bisect in the test VM found the right cause in 3 probes, 7 boots)
 - [x] `--tier auto` with capability hints (`--needs kernel|hardware`) (P7c)
 
-**Exit:** one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
+**Exit:** one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end. **Met** ([journal](./journal/p7-metal.md)): NetworkManager's Wi-Fi power save switched on by one of three causes, found (#680) in 3 metal probes, 6 reboots, the default entry untouched throughout.
 
 ## P8: GNOME app, packaging, hardening
 - GTK4/libadwaita app: timeline of causes, cause detail with semantic diffs, "what changed since…" picker, bisect wizard (nspawn/vm), undo with dry-run preview
