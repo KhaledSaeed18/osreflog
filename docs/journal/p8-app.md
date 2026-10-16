@@ -1,6 +1,6 @@
 # P8: GNOME app, packaging, hardening
 
-- Status: **pre-flight done, first slice planned** (P7 closed 2026-10-16)
+- Status: **P8a done**; P8b next
 - Started: 2026-10-16
 - Roadmap: [P8](../roadmap.md#p8-gnome-app-packaging-hardening)
 - Exit: installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
@@ -60,3 +60,12 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 
 - **Q4 answered.** In the offline boot, `dnf5` ran the actions hook: "osreflog: no pre-transaction checkpoint: osreflogd is not running". osreflogd is wanted by `multi-user.target` only, and an offline update boots `system-update.target`. So no checkpoints bracketed the update and no live causes were recorded for it, but nothing was lost: the next boot checkpoint (c000133) has the whole update in its diff and the dnf history import names it ("dnf #52 dnf5daemon-server (uid 0, ok)"). Fix: `osreflogd.service` is now also `WantedBy=system-update.target` and `Before=dnf5-offline-transaction.service packagekit-offline-update.service`. It takes effect at the next `install-dev.sh` (which re-enables the unit) and is confirmed by the next offline update. [open-questions.md](../open-questions.md) R11.
 - **2,582 "package changes" between two boots were access times.** The probe-day boot checkpoints counted 693 and 2,582 package changes with no package transaction. All were `modify` with only `times` changed: `relatime` access times on files a boot reads (libwacom data, GStreamer plugins, Python modules, icons). Coverage already left them out (`Change::times_only`); the class counts didn't. `ClassCounts::add_change` and the ledger's summary query now count a times-only change as noise, so old intervals read right too. Test: `times_alone_count_as_noise`.
+
+### 2026-10-16: P8a, the history browser
+
+- `gtk4-devel` and `libadwaita-devel` installed (70 packages with the `glib2` upgrade), and `install-dev.sh` re-run: osreflogd is now linked into `system-update.target.wants` (the Q4 fix is live).
+- **`crates/client`**: the osreflogd proxy moved out of the CLI, with typed read calls (`status`, `causes`, `show`, `log`, `diff`) and a `ClientError` that tells "the daemon isn't running" from everything else. The CLI uses it.
+- **`bins/osreflog-app`** (gtk4-rs 0.11, libadwaita 0.9): `AdwNavigationSplitView` with the timeline (causes by local day, newest first; kind icon, label, change count, package files, time) and the selected cause (process, command, D-Bus caller, cgroup, time window, package files; each change with what happened, by which process, its size, and its summary lines in an expander). The window title carries the daemon's status line. D-Bus calls run on a tokio thread of their own; the GTK loop awaits their replies over a channel. It asks for new causes every 5 s and rebuilds the timeline only when they changed. `view.rs` holds everything the window shows as plain data: 3 tests.
+- **Seen running against the real daemon** (GTK's Broadway backend, viewed in a browser): today's causes listed; #751 `uresourced.service` with its D-Bus caller (`systemd … SetUnitProperties`) and 8 changed files; #752, the `dnf install` of the GTK headers, with 31,422 package files counted and its one live change (`/etc/ld.so.cache` by `ldconfig`). With `systemctl stop osreflogd` the timeline gave way to "osreflog isn't running" within a refresh; with `start` it came back by itself, a new cause (systemd, from the restart) already at the top.
+
+**P8a exit met.** Rough edges for later slices: long commands wrap to three lines in the timeline; the status line is cut off in a narrow sidebar; no search or filter yet.
