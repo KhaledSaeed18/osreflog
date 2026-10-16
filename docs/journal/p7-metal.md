@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate passed 2026-10-16; P7a done**; P7b–P7d next
+- Status: **boot gate passed 2026-10-16; P7a done; P7b and P7c built, not yet run** (no root overnight); P7d next
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate-passed-2026-10-16)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -176,3 +176,29 @@ What hasn't run on this laptop yet: anything that writes to the real `/boot`. Be
 | Left over | no probe container |
 
 Found: the daemon stopped the container within a second of a verdict written inside it, so `systemd-run -M` lost its connection ("Connection reset by peer") before the CLI's "recorded" message showed. The verdict counted, but a person would see the session close under them. The daemon now waits 3 s before stopping the container, and waits for it to be gone before deleting the clone (the delete could race the shutdown and leave the clone to the boot doctor). Not re-run since this change.
+
+### 2026-10-16 (overnight, no root): P7b and P7c built
+
+Everything here is unit-tested; nothing ran as root, so nothing ran in the VM or touched a real `/boot`. The VM run that tests it is ready (below).
+
+**P7b, `bisect start --tier metal`.**
+- `osreflogd --boot-worker '<job>'` (`bootworker.rs`, 5 tests on a stand-in `/boot` with the real `grub2-editenv` and a stand-in dracut): the one step that writes `/boot`, in its own transient unit outside the daemon's sandbox (where `/boot` is read-only). **arm**: record the default, plan and install the kernel, write the entry, write `pending.json` with the record, set `next_entry`; on any failure `/boot` is put back (tested: a failing dracut, a clone without a kernel, an unpinned default). **disarm**: for a verdict given before the reboot, and for a reset.
+- In the session: a metal probe is a kept clone `pN` plus a throwaway `pN-home`, prepared with G3's `prepare`, then armed by the worker. `Current` remembers the boot id at arming: a daemon restart in the same boot changes nothing, a new boot means the probe had its chance. Back on the default, the verdict file in the clone answers; without one the session says whether the probe booted (G3's boot record) or not, and waits for a verdict given on the host or for `bisect rearm`. It never skips or re-arms by itself (the G5 finding: a boot record isn't a finished boot).
+- CLI: `bisect start --tier metal`, `--yes` / `--no-reboot` (otherwise it asks on a terminal before `systemctl reboot`), `bisect rearm`; inside a probe `bisect good|bad|skip` writes the verdict and offers the reboot back.
+- Found while reviewing: a probe of a state older than P7a has an `osreflog` CLI with no in-probe mode, which would look for a daemon that isn't running. Every manual probe (metal or container) now gets `/usr/local/bin/osreflog-verdict`, a small script written into the clone that writes the verdict whatever osreflog the state has, and the probe's messages point at it.
+
+**P7c, `--tier auto`** (now the default) with `--needs kernel,hardware`: `bisect run` takes nspawn, or vm for kernel, and refuses hardware (a metal probe can't judge itself); `bisect start` takes nspawn, or metal for kernel or hardware. A "not reproduced" result names the next tier up. `Tier::auto` / `Tier::next` are pure and tested.
+
+**Workspace**: 174 tests pass, clippy clean. A `small_stream` failure in full-workspace runs came from a stale test binary in `target/` built by the side session in its own worktree (the `CARGO_MANIFEST_DIR` baked into it pointed at that worktree, since deleted); `cargo clean -p osreflog-btrfs` fixed it. It also plausibly explains the G4 test flake that coincided with that session's builds. The release binaries were rebuilt and checked for that path.
+
+#### To run in the morning (one sudo each)
+
+1. The P7b metal bisect in the test VM: this build installed in the VM, four causes, `bisect start --tier metal`, then a reboot per probe with the verdict given inside the probe (alternately `osreflog-verdict` and `osreflog bisect`), and back:
+   ```
+   sudo scripts/p7/testvm.sh flow scripts/p7/p7b-step.sh target/release/osreflogd target/release/osreflog data/systemd/osreflogd.service data/systemd/osreflog-boot-doctor.service
+   ```
+2. P7a again on the laptop with this build (the 3 s pause before stopping a container, `osreflog-verdict` in containers):
+   ```
+   sudo sh -c 'scripts/install-dev.sh && scripts/p7/manual.sh'
+   ```
+3. The P6 seeded suite, since `bisect run` now drives the shared `TwoLevel` search: `sudo scripts/p6/seeded.sh`.

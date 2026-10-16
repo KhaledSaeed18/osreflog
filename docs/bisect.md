@@ -3,9 +3,10 @@
 `osreflog bisect` finds the first cause after which a test fails, in the spirit of `git bisect run` and Mozilla's `mozregression`.
 
 ```
-osreflog bisect run --good @{boot-3} --bad @{now} [--tier nspawn|vm|metal] -- <test command>
-osreflog bisect start --good c40 --bad c47 [--tier metal]    # manual verdicts (P7a: containers)
-osreflog bisect good | bad | skip                            # on the host, or as root inside the probe
+osreflog bisect run --good @{boot-3} --bad @{now} [--tier auto|nspawn|vm] [--needs kernel] -- <test command>
+osreflog bisect start --good c40 --bad c47 [--tier auto|nspawn|metal] [--needs hardware]   # verdicts by hand
+osreflog bisect good | bad | skip [--yes|--no-reboot]          # on the host, or as root inside the probe
+osreflog bisect rearm                                          # a metal probe that didn't boot
 osreflog bisect log | reset
 ```
 
@@ -46,7 +47,7 @@ Probe count: ⌈log₂(checkpoints)⌉ + ⌈log₂(causes in interval)⌉, versu
 | `vm` | QEMU/KVM, direct kernel boot of the probe's **own** kernel (`/usr/lib/modules/<ver>/vmlinuz` lives inside the snapshot on Fedora), root on **virtiofs** shared from the probe subvolume, headless, result file read back from the clone | kernel version, modules, boot sequence, systemd ordering, generic drivers (virtio) | P1: 34 s to `running`, 512 MiB guest, 615 MiB qemu RSS, 2 vCPU |
 | `metal` | one-time reboot of the real machine into a writable clone of the probe; you give the verdict after boot | anything hardware-specific: Wi-Fi, GPU, suspend, firmware interaction | minutes per probe + your attention |
 
-**Tier choice.** `--tier auto` (default) picks the cheapest tier whose capabilities match the test's declared needs (`--needs kernel`, `--needs hardware`), and suggests trying a cheaper tier first. A regression that doesn't reproduce in the chosen tier is reported as "good in vm on both ends: try metal" rather than a false answer.
+**Tier choice.** `--tier auto` (the default) picks the cheapest tier that has the test's declared needs: `bisect run` takes nspawn, or vm with `--needs kernel`, and refuses `--needs hardware` (a metal probe needs a person); `bisect start` takes nspawn, or metal with `--needs kernel` or `--needs hardware`. A regression that doesn't reproduce in the chosen tier ends as "not reproduced", with the next tier up to try (nspawn → vm → `bisect start --tier metal`), never a false answer.
 
 ### VM tier details
 
@@ -58,16 +59,17 @@ Probe count: ⌈log₂(checkpoints)⌉ + ⌈log₂(causes in interval)⌉, versu
 - Each probe runs as a transient unit that osreflogd starts through systemd's D-Bus API (`StartTransientUnit`, with `PrivateMounts`, `Delegate` and its own memory limit), outside the daemon's sandbox and memory cap. Measured in P6: nspawn command probes 0.3–0.9 s, VM probes 12.7–14.0 s with qemu at 424–436 MiB.
 - Budget: one probe at a time, **512 MiB** guest RAM with a free-page-reporting balloon. P1: `running` at 34.2 s with 0 failed units, qemu peak RSS 615 MiB. If `MemAvailable` drops below a threshold, the probe waits.
 
-### Metal tier details (behind the boot gate)
+### Metal tier details
 
-1. Build the probe clone at `osreflog/probes/pN`.
-2. Make sure its kernel is bootable: if `/boot` already has `vmlinuz-<ver>` (Fedora keeps 3 kernels), reuse it. Otherwise copy `vmlinuz` from the probe and generate an initramfs into `/boot/osreflog/`.
-3. Write a **temporary BLS entry** `/boot/loader/entries/osreflog-probe.conf` with `rootflags=subvol=osreflog/probes/pN` and `osreflog.probe=N`.
-4. Arm it for **one boot only** (`grub2-reboot <id>`). The default entry is untouched, so a failed probe boot falls back to your normal system on the next power cycle _(verify: grub2-reboot with BLS ids, and greenboot-style fallback if the probe hangs)_.
-5. The clone is prepared first (P7 G3): its fstab mounts the probe at `/` and a throwaway snapshot of `home` at `/home`; osreflogd and the user agent don't start (`ConditionKernelCommandLine=!osreflog.probe`); the dnf hook is removed. After the probe boots, a oneshot unit records the boot in the clone, and a login message and desktop notification say "osreflog bisect probe N: run your check, then `sudo osreflog bisect good|bad|skip`". The verdict is a file in the clone too: probes never mount the ledger, and the daemon reads both files once the default has booted again.
-6. Rebooting returns to the default entry; the daemon deletes the probe entry and clone and continues the bisect.
+`osreflog bisect start --good A --bad B --tier metal` (verdicts by hand; `bisect run` refuses metal, since a probe can't judge itself). For each probe:
 
-The boot gate ([roadmap](./roadmap.md)) must pass before step 3 is ever run on real hardware. Getting back by hand: [recovery.md](./recovery.md).
+1. **Clone** the probe's state at `osreflog/probes/pN` (and replay causes into it, as for any probe); snapshot the home subvolume as `osreflog/probes/pN-home` when `/home` is a subvolume of the same btrfs.
+2. **Prepare** the clone (P7 G3): its fstab mounts `pN` at `/` and `pN-home` at `/home`; osreflogd and the user agent don't start (`ConditionKernelCommandLine=!osreflog.probe`, `ConditionPathExists=!/var/lib/osreflog-probe/manual`); the dnf hook is removed; a oneshot unit records the boot; `/usr/local/bin/osreflog-verdict` gives the verdict whatever osreflog version this state has; a login message and a desktop notification say what this boot is.
+3. **Arm** (`osreflogd --boot-worker`, its own transient unit, the only step that writes `/boot`): record the default entry (`saved_entry` + BLAKE3 of its entry file; refused when `saved_entry` isn't set, or a `prev_saved_entry` is), reuse `/boot/vmlinuz-<ver>` when it's the same image or copy the probe's `vmlinuz` and build its initramfs from the clone into `/boot/osreflog/`, write `/boot/loader/entries/osreflog-probe.conf` (the default's entry with the probe's kernel, `rootflags=subvol=osreflog/probes/pN`, `osreflog.probe=N`, `panic=10`), write `osreflog/probes/pending.json`, and set `next_entry=osreflog-probe` with `grub2-editenv` (not `grub2-reboot`, which can rewrite `saved_entry`). GRUB boots it once and clears `next_entry` as it does.
+4. **Reboot**: the CLI asks (`--yes` reboots, `--no-reboot` doesn't ask). In the probe: check, then `sudo osreflog-verdict good|bad|skip` (or `sudo osreflog bisect …` with a new enough CLI), and reboot.
+5. **Back on the default**: `osreflog-boot-doctor.service` removes the entry and kernel files and checks the default against the record; osreflogd resumes the saved session, reads the verdict from the clone, deletes the clones and arms the next probe. Without a verdict it says whether the probe booted (its boot record) or not, and waits: give the verdict on the host, or `osreflog bisect rearm`. It never skips or re-arms on its own.
+
+A verdict given on the host before rebooting disarms `/boot` through the boot worker; so does `bisect reset`. The boot gate ([roadmap](./roadmap.md)) passed in a Secure Boot test VM before any of this ran on hardware. Getting back by hand: [recovery.md](./recovery.md).
 
 ## What a bisect result looks like
 
