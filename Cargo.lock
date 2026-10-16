@@ -627,6 +627,7 @@ dependencies = [
  "anyhow",
  "clap",
  "osreflog-bisect",
+ "osreflog-client",
  "osreflog-ledger",
  "osreflog-model",
  "osreflog-undo",
@@ -666,6 +667,17 @@ dependencies = [
  "rustix",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "osreflog-client"
+version = "0.1.0"
+dependencies = [
+ "osreflog-model",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "zbus",
 ]
 
 [[package]]

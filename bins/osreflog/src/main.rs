@@ -16,29 +16,7 @@ use osreflog_model::{
     Cause, CauseDetail, Checkpoint, DiffReport, LogEntry, Status, VerifyReport, WhyEntry,
 };
 
-#[zbus::proxy(
-    interface = "io.github.khaledsaeed18.osreflog1",
-    default_service = "io.github.khaledsaeed18.osreflog1",
-    default_path = "/io/github/khaledsaeed18/osreflog1"
-)]
-pub(crate) trait Osreflog {
-    fn status(&self) -> zbus::Result<String>;
-    fn log(&self, limit: u32) -> zbus::Result<String>;
-    fn diff(&self, from: &str, to: &str, all: bool) -> zbus::Result<String>;
-    fn verify(&self) -> zbus::Result<String>;
-    fn checkpoint(&self, note: &str) -> zbus::Result<String>;
-    fn hook(&self, phase: &str, pid: u32) -> zbus::Result<String>;
-    fn causes(&self, limit: u32) -> zbus::Result<String>;
-    fn show(&self, id: i64) -> zbus::Result<String>;
-    fn why(&self, path: &str, limit: u32) -> zbus::Result<String>;
-    fn undo_plan(&self, id: i64) -> zbus::Result<String>;
-    fn undo(&self, id: i64, digest: &str) -> zbus::Result<String>;
-    fn bisect_run(&self, args: &str) -> zbus::Result<String>;
-    fn bisect_status(&self) -> zbus::Result<String>;
-    fn bisect_reset(&self) -> zbus::Result<String>;
-    fn bisect_verdict(&self, verdict: &str) -> zbus::Result<String>;
-    fn bisect_rearm(&self) -> zbus::Result<String>;
-}
+pub(crate) use osreflog_client::OsreflogProxy;
 
 /// How long the dnf hook waits for the daemon before giving up (and letting dnf continue).
 const HOOK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -184,19 +162,7 @@ fn split_range(range: Option<&str>) -> (String, String) {
 
 /// Turns a D-Bus method error into its message.
 pub(crate) fn explain(e: zbus::Error) -> anyhow::Error {
-    match e {
-        zbus::Error::MethodError(name, Some(msg), _)
-            if name.as_str().starts_with(osreflog_model::bus::ERROR_PREFIX) =>
-        {
-            anyhow::anyhow!("{msg}")
-        }
-        zbus::Error::MethodError(name, _, _)
-            if name.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown" =>
-        {
-            anyhow::anyhow!("osreflogd is not running (systemctl status osreflogd)")
-        }
-        other => anyhow::Error::new(other),
-    }
+    anyhow::Error::new(osreflog_client::explain(e))
 }
 
 async fn proxy(session: bool) -> anyhow::Result<OsreflogProxy<'static>> {

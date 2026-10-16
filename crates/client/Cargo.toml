@@ -1,0 +1,19 @@
+[package]
+name = "osreflog-client"
+description = "osreflog's D-Bus client: the osreflogd interface as a typed proxy, shared by the CLI and the app."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+osreflog-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zbus.workspace = true
+
+[lints]
+workspace = true
