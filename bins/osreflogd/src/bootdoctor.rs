@@ -32,9 +32,12 @@ pub struct Pending {
     pub n: u32,
     /// The clone's name in `osreflog/probes/`, and its throwaway home's.
     pub clone: String,
+    #[serde(default)]
     pub home: Option<String>,
-    /// The default entry when the probe was armed.
-    pub record: DefaultRecord,
+    /// The default entry when the probe was armed; none for a probe that doesn't boot the
+    /// machine (a manual container probe).
+    #[serde(default)]
+    pub record: Option<DefaultRecord>,
 }
 
 #[derive(Debug, Default)]
@@ -140,14 +143,18 @@ pub fn check(
     // 2. The default entry.
     let pending = pending(probes);
     match &pending {
-        Ok(Some(p)) => match boot.verify(&p.record) {
+        Ok(Some(Pending {
+            n,
+            record: Some(rec),
+            ..
+        })) => match boot.verify(rec) {
             Ok(()) => r.say(format!(
-                "default {} untouched since probe {} was armed",
-                p.record.saved_entry, p.n
+                "default {} untouched since probe {n} was armed",
+                rec.saved_entry
             )),
-            Err(e) => r.problem(format!("{e} (since probe {} was armed)", p.n)),
+            Err(e) => r.problem(format!("{e} (since probe {n} was armed)")),
         },
-        Ok(None) | Err(_) => match boot.default_record() {
+        Ok(_) | Err(_) => match boot.default_record() {
             Ok(rec) => r.say(format!("default {}", rec.saved_entry)),
             Err(BootError::Refused(why)) => {
                 r.say(format!("metal probes would be refused here: {why}"));
@@ -159,7 +166,9 @@ pub fn check(
     // 3. Clones.
     let keep: Vec<String> = match &pending {
         Ok(Some(p)) => {
-            if is_name(&p.clone) {
+            if p.record.is_none() {
+                r.say(format!("probe {} (a container) waits for a verdict", p.n));
+            } else if is_name(&p.clone) {
                 match probe::booted(&probes.join(&p.clone), p.n) {
                     Some(b) => r.say(format!(
                         "probe {} booted (kernel {}); its result waits for the bisect",
@@ -339,7 +348,7 @@ mod tests {
             n,
             clone: clone.clone(),
             home: Some(format!("{clone}-home")),
-            record: rec,
+            record: Some(rec),
         };
         std::fs::write(f.probes.join(PENDING), serde_json::to_vec(&p).unwrap()).unwrap();
         p

@@ -65,34 +65,55 @@ fn io_other(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-/// A probe on disk: a writable subvolume in `osreflog/tmp/`.
+/// A probe on disk: a writable subvolume in `osreflog/tmp/` (deleted when dropped), or in
+/// `osreflog/probes/` when it must outlive this call (a manual probe waiting for a verdict).
 pub struct Probe<'a> {
     engine: &'a Engine,
     pub name: String,
+    kept: bool,
 }
 
 impl Probe<'_> {
     #[must_use]
     pub fn path(&self) -> PathBuf {
-        self.engine.layout().tmp().join(&self.name)
+        if self.kept {
+            self.engine.layout().probes().join(&self.name)
+        } else {
+            self.engine.layout().tmp().join(&self.name)
+        }
     }
 
     /// The probe's path from the btrfs top level, for the runner's own mount.
     #[must_use]
     pub fn top_relative(&self) -> String {
-        format!("osreflog/tmp/{}", self.name)
+        format!(
+            "osreflog/{}/{}",
+            if self.kept { "probes" } else { "tmp" },
+            self.name
+        )
+    }
+
+    /// Leaves the probe on disk: it is deleted later with [`delete_kept`].
+    #[must_use]
+    pub fn keep(mut self) -> String {
+        self.kept = true;
+        std::mem::take(&mut self.name)
     }
 }
 
 impl Drop for Probe<'_> {
     fn drop(&mut self) {
+        if self.kept || self.name.is_empty() {
+            return;
+        }
         if let Err(e) = ioctl::delete_subvolume(self.engine.layout().tmp_fd(), &self.name) {
             tracing::warn!(probe = %self.name, "deleting the probe failed: {e}");
         }
     }
 }
 
-/// A writable clone of checkpoint snapshot `snapshot` named `name`.
+/// A writable clone of checkpoint snapshot `snapshot` named `name`, in `osreflog/tmp/`, or in
+/// `osreflog/probes/` with `kept`.
 ///
 /// # Errors
 /// If the snapshot can't be opened or cloned.
@@ -100,15 +121,41 @@ pub fn clone_checkpoint<'a>(
     engine: &'a Engine,
     snapshot: &str,
     name: &str,
+    kept: bool,
 ) -> io::Result<Probe<'a>> {
     let layout = engine.layout();
-    let _ = ioctl::delete_subvolume(layout.tmp_fd(), name);
     let src = File::open(layout.snapshot_path(snapshot))?;
-    ioctl::create_snapshot(src.as_fd(), layout.tmp_fd(), name, false)?;
+    if kept {
+        let dir = File::open(layout.probes())?;
+        let _ = ioctl::delete_subvolume(dir.as_fd(), name);
+        ioctl::create_snapshot(src.as_fd(), dir.as_fd(), name, false)?;
+    } else {
+        let _ = ioctl::delete_subvolume(layout.tmp_fd(), name);
+        ioctl::create_snapshot(src.as_fd(), layout.tmp_fd(), name, false)?;
+    }
     Ok(Probe {
         engine,
         name: name.to_owned(),
+        kept,
     })
+}
+
+/// The path of a kept probe.
+#[must_use]
+pub fn kept_path(engine: &Engine, name: &str) -> PathBuf {
+    engine.layout().probes().join(name)
+}
+
+/// Deletes a kept probe (no error if it's already gone).
+pub fn delete_kept(engine: &Engine, name: &str) {
+    let Ok(dir) = File::open(engine.layout().probes()) else {
+        return;
+    };
+    match ioctl::delete_subvolume(dir.as_fd(), name) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(probe = %name, "deleting the kept probe failed: {e}"),
+    }
 }
 
 fn split(path: &str) -> (&str, &str) {

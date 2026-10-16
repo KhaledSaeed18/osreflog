@@ -33,6 +33,12 @@ pub struct Spec {
     pub boot: bool,
     pub timeout_s: u64,
     pub mem_mib: u64,
+    /// A manual probe: boot the container (registered as `machine`) and keep it running until
+    /// the unit is stopped, for a person to look into with `machinectl shell`.
+    #[serde(default)]
+    pub manual: bool,
+    #[serde(default)]
+    pub machine: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +187,43 @@ fn nspawn(probe: &Path, spec: &Spec, out: &mut RunResult) {
             "no result: {}",
             tail(&std::fs::read_to_string(&log).unwrap_or_default(), 5)
         );
+    }
+}
+
+/// A manual probe: the clone booted as a container until this unit is stopped (the daemon
+/// does that once a verdict is written). nspawn turns the SIGTERM into an orderly shutdown.
+fn nspawn_manual(probe: &Path, spec: &Spec, out: &mut RunResult) {
+    let log = probe.join(PROBE_DIR).join("nspawn.log");
+    let Ok(log_file) = std::fs::File::create(&log) else {
+        out.detail = "can't write into the probe".into();
+        return;
+    };
+    let err_file = log_file.try_clone().ok();
+    let mut cmd = Command::new("systemd-nspawn");
+    cmd.args([
+        "-q",
+        "--keep-unit",
+        "--register=yes",
+        "--private-network",
+        "--machine",
+    ])
+    .arg(&spec.machine)
+    .arg("-D")
+    .arg(probe)
+    .args(["-b", "--", "systemd.unit=multi-user.target"])
+    .stdin(Stdio::null())
+    .stdout(log_file);
+    if let Some(e) = err_file {
+        cmd.stderr(e);
+    }
+    let started = Instant::now();
+    match cmd.status() {
+        Ok(status) => {
+            out.ms = ms_since(started);
+            out.exit_code = status.code();
+            out.detail = format!("the container stopped ({status})");
+        }
+        Err(e) => out.detail = format!("systemd-nspawn didn't start: {e}"),
     }
 }
 
@@ -369,6 +412,7 @@ fn run(spec: &Spec) -> RunResult {
     }
     let probe = top.join(&spec.probe);
     match spec.tier {
+        Tier::Nspawn if spec.manual => nspawn_manual(&probe, spec, &mut out),
         Tier::Nspawn => nspawn(&probe, spec, &mut out),
         Tier::Vm => vm(&probe, &top.join("osreflog/cache"), &run, spec, &mut out),
     }

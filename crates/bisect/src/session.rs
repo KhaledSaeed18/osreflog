@@ -27,6 +27,21 @@ pub struct Args {
     /// Per probe; default 120 s (nspawn), 240 s (vm).
     #[serde(default)]
     pub timeout_s: Option<u64>,
+    /// Verdicts from a person (`bisect start`), not from a test (`bisect run`): each probe
+    /// waits, booted, until someone says good, bad or skip. `test` is unused.
+    #[serde(default)]
+    pub manual: bool,
+}
+
+/// A probe waiting for a person's verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    pub probe: u32,
+    /// As in [`ProbeRecord::what`].
+    pub what: String,
+    pub since_ms: i64,
+    /// How to look at it, and how to answer.
+    pub how: Vec<String>,
 }
 
 /// One probe and what it said.
@@ -94,4 +109,7 @@ pub struct Status {
     pub finding: Option<Finding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A manual session's probe that waits for a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
 }

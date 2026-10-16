@@ -55,10 +55,11 @@ enum Need {
 impl Service {
     #[must_use]
     pub fn new(engine: Arc<Engine>, wake: Arc<Notify>) -> Self {
+        let bisect = crate::bisect::resume(&engine);
         Self {
             engine,
             wake,
-            bisect: crate::bisect::Shared::default(),
+            bisect,
         }
     }
 
@@ -307,31 +308,37 @@ impl Service {
         #[zbus(connection)] c: &zbus::Connection,
     ) -> Result<String, Error> {
         self.authorize(&header, c, Need::Read).await?;
-        let status = self
-            .bisect
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let status = crate::bisect::status(&self.bisect);
         serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
     }
 
-    /// Forgets the last bisect; refused while one is running.
+    /// The verdict (`good`, `bad` or `skip`) for the manual probe that waits for one; returns
+    /// the `Status` as it was. The session moves on within a second.
+    async fn bisect_verdict(
+        &self,
+        verdict: String,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        let uid = self.authorize(&header, c, Need::Bisect).await?;
+        tracing::info!(uid, %verdict, "bisect verdict");
+        let status = crate::bisect::verdict(&self.engine, &self.bisect, &verdict)?;
+        serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
+    }
+
+    /// Forgets the last bisect. A manual one is stopped (its container and clone removed); an
+    /// automatic one that still runs is refused.
     async fn bisect_reset(
         &self,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] c: &zbus::Connection,
     ) -> Result<String, Error> {
         self.authorize(&header, c, Need::Bisect).await?;
-        let mut s = self
-            .bisect
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if s.as_ref().is_some_and(|s| s.running) {
-            return Err(Error::Invalid(
-                "a bisect is running; wait for it to finish".into(),
-            ));
-        }
-        *s = None;
+        let engine = Arc::clone(&self.engine);
+        let shared = Arc::clone(&self.bisect);
+        tokio::task::spawn_blocking(move || crate::bisect::reset(&engine, &shared))
+            .await
+            .map_err(|e| Error::Failed(e.to_string()))??;
         Ok("null".into())
     }
 

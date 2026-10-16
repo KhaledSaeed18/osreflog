@@ -9,5 +9,5 @@ pub mod two_level;
 
 pub use replay::{Action, CauseTouches, Op, Touch};
 pub use search::{Outcome, Search, Verdict, expected_probes};
-pub use session::{Args, Culprit, Finding, ProbeRecord, Status, Tier};
+pub use session::{Args, Culprit, Finding, ProbeRecord, Status, Tier, Waiting};
 pub use two_level::{Answer, Step, TwoLevel};

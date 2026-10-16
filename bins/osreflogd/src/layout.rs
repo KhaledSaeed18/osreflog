@@ -7,6 +7,7 @@
 //! └── osreflog/
 //!     ├── ledger/              own subvolume: rolling back / never rolls back history
 //!     ├── snapshots/c000042    read-only checkpoints
+//!     ├── probes/pN            bisect probes that wait for a verdict (manual, metal)
 //!     └── tmp/                 scratch: database copies, live snapshots for @{now}
 //! ```
 
@@ -19,6 +20,7 @@ use rustix::mount::{MountFlags, mount};
 
 pub const DEFAULT_TOP: &str = "/run/osreflog/top";
 const BASE: &str = "osreflog";
+const PROBES: &str = "probes";
 
 #[derive(Debug, thiserror::Error)]
 pub enum LayoutError {
@@ -216,6 +218,7 @@ impl Layout {
         let base = top.join(BASE);
         fs::create_dir_all(base.join("snapshots")).map_err(io("creating osreflog/snapshots"))?;
         fs::create_dir_all(base.join("tmp")).map_err(io("creating osreflog/tmp"))?;
+        fs::create_dir_all(base.join(PROBES)).map_err(io("creating osreflog/probes"))?;
         if !base.join("ledger").exists() {
             let base_dir = open_dir(&base)?;
             ioctl::create_subvolume(base_dir.as_fd(), "ledger")
@@ -266,6 +269,13 @@ impl Layout {
     #[must_use]
     pub fn tmp(&self) -> PathBuf {
         self.base().join("tmp")
+    }
+
+    /// Probes that outlive the daemon (a manual bisect waits for a person, or a reboot):
+    /// never cleared at start; the boot doctor removes those no session waits for.
+    #[must_use]
+    pub fn probes(&self) -> PathBuf {
+        self.base().join(PROBES)
     }
 
     #[must_use]
