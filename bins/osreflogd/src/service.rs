@@ -326,6 +326,19 @@ impl Service {
         serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
     }
 
+    /// Takes back the last verdict of a manual bisect (running or finished); the session asks
+    /// that probe again. Returns the `Status` as it was.
+    async fn bisect_undo_verdict(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        let uid = self.authorize(&header, c, Need::Bisect).await?;
+        tracing::info!(uid, "bisect: take back the last verdict");
+        let status = crate::bisect::take_back(&self.engine, &self.bisect)?;
+        serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
+    }
+
     /// Arms the waiting metal probe again (it didn't boot, or came back without a verdict);
     /// returns the `Status` as it was.
     async fn bisect_rearm(

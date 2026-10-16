@@ -26,6 +26,7 @@ pub trait Osreflog {
     fn bisect_reset(&self) -> zbus::Result<String>;
     fn bisect_verdict(&self, verdict: &str) -> zbus::Result<String>;
     fn bisect_rearm(&self) -> zbus::Result<String>;
+    fn bisect_undo_verdict(&self) -> zbus::Result<String>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -178,6 +179,15 @@ impl Client {
     /// If no probe waits, or the call fails.
     pub async fn bisect_verdict(&self, verdict: &str) -> Result<(), ClientError> {
         self.proxy.bisect_verdict(verdict).await.map_err(explain)?;
+        Ok(())
+    }
+
+    /// Takes back the last verdict of a manual bisect; the session asks that probe again.
+    ///
+    /// # Errors
+    /// With no manual bisect or no verdict yet, or if the call fails.
+    pub async fn bisect_undo_verdict(&self) -> Result<(), ClientError> {
+        self.proxy.bisect_undo_verdict().await.map_err(explain)?;
         Ok(())
     }
 

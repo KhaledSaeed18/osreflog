@@ -59,6 +59,8 @@ pub struct Inner {
     cancel: AtomicBool,
     /// Set by `bisect rearm`: arm the waiting metal probe again.
     rearm: AtomicBool,
+    /// Set by `bisect undo-verdict`: take back the last verdict.
+    take_back: AtomicBool,
 }
 
 pub type Shared = Arc<Inner>;
@@ -637,6 +639,34 @@ impl Session<'_> {
         });
     }
 
+    /// `bisect undo-verdict`: the probe that waits (if one does) goes, the search forgets the
+    /// last verdict and its probe record, and the session runs on, asking that probe again.
+    fn take_back(&mut self) {
+        if let Some(cur) = self.saved.current.take() {
+            self.release(&cur);
+        }
+        self.saved.status.waiting = None;
+        match self.saved.machine.take_back() {
+            Some((_, verdict)) => {
+                let what = self
+                    .saved
+                    .status
+                    .probes
+                    .pop()
+                    .map(|r| r.what)
+                    .unwrap_or_default();
+                let s = &mut self.saved.status;
+                s.running = true;
+                s.finding = None;
+                s.error = None;
+                self.log(format!(
+                    "  {verdict:?} for {what} taken back: that probe is asked again"
+                ));
+            }
+            None => self.log("no verdict to take back"),
+        }
+    }
+
     /// Everything the probe `cur` holds goes: its container or its arming of `/boot`, its
     /// clones, `pending.json`.
     fn release(&self, cur: &Current) {
@@ -1169,6 +1199,10 @@ fn manual_loop(session: &mut Session<'_>) {
             *lock(&session.shared) = None;
             return;
         }
+        if session.shared.take_back.swap(false, Ordering::Relaxed) {
+            session.take_back();
+            continue;
+        }
         let Some(cur) = session.saved.current.clone() else {
             if !session.saved.status.running {
                 return;
@@ -1227,6 +1261,39 @@ pub fn verdict(engine: &Engine, shared: &Shared, verdict: &str) -> Result<Status
     let path = probe::kept_path(engine, &format!("p{}", w.probe));
     osreflog_boot::probe::write_verdict(&path, verdict)
         .map_err(|e| invalid(format!("recording the verdict: {e}")))?;
+    Ok(s)
+}
+
+/// `bisect undo-verdict`: takes back the last verdict of a manual session, running or
+/// finished (a finished one is reloaded from the ledger and resumed).
+///
+/// # Errors
+/// With no session, an automatic one (a test gave its verdicts), or no verdict yet.
+pub fn take_back(engine: &Arc<Engine>, shared: &Shared) -> Result<Status> {
+    let Some(s) = status(shared) else {
+        return Err(invalid("no bisect: osreflog bisect start"));
+    };
+    if !s.args.manual {
+        return Err(invalid(
+            "an automatic bisect's verdicts came from its test: run it again instead",
+        ));
+    }
+    if s.probes.is_empty() {
+        return Err(invalid("no verdict has been given yet"));
+    }
+    shared.take_back.store(true, Ordering::Relaxed);
+    if !s.running {
+        // The session's thread ended with the search: resume it from the ledger.
+        let saved = match engine.ledger().meta(SAVED_KEY) {
+            Ok(Some(json)) if !json.is_empty() => serde_json::from_str::<Saved>(&json)
+                .map_err(|e| invalid(format!("the saved session didn't parse: {e}")))?,
+            _ => {
+                shared.take_back.store(false, Ordering::Relaxed);
+                return Err(invalid("the finished session isn't saved any more"));
+            }
+        };
+        spawn(Arc::clone(engine), shared, saved, false)?;
+    }
     Ok(s)
 }
 

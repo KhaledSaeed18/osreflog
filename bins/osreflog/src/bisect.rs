@@ -131,6 +131,12 @@ pub enum BisectCmd {
         #[command(flatten)]
         reboot: RebootOpts,
     },
+    /// Take back the last verdict (a mistake): that probe is asked again. Works on a finished
+    /// bisect too, which then goes on.
+    UndoVerdict {
+        #[command(flatten)]
+        reboot: RebootOpts,
+    },
     /// Arm the waiting metal probe again (it didn't boot, or came back without a verdict).
     Rearm {
         #[command(flatten)]
@@ -273,6 +279,7 @@ fn reboot_opts(cmd: &BisectCmd) -> Option<RebootOpts> {
         | BisectCmd::Bad { reboot }
         | BisectCmd::Skip { reboot }
         | BisectCmd::Rearm { reboot }
+        | BisectCmd::UndoVerdict { reboot }
         | BisectCmd::Start { reboot, .. } => Some(*reboot),
         _ => None,
     }
@@ -371,8 +378,12 @@ fn print_waiting(status: &Status) {
 }
 
 /// Follows the session's log until it ends or a probe other than `after` waits for a verdict.
-async fn follow(p: &OsreflogProxy<'_>, after: Option<u32>) -> anyhow::Result<ExitCode> {
-    let mut shown: Option<usize> = None;
+async fn follow(
+    p: &OsreflogProxy<'_>,
+    after: Option<u32>,
+    shown_lines: Option<usize>,
+) -> anyhow::Result<ExitCode> {
+    let mut shown: Option<usize> = shown_lines;
     loop {
         let raw = p.bisect_status().await.map_err(crate::explain)?;
         let Some(status) = serde_json::from_str::<Option<Status>>(&raw)? else {
@@ -546,7 +557,7 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
             p.bisect_run(&serde_json::to_string(&args)?)
                 .await
                 .map_err(crate::explain)?;
-            let code = follow(p, None).await?;
+            let code = follow(p, None, None).await?;
             offer_reboot(p, reboot).await?;
             Ok(code)
         }
@@ -555,7 +566,33 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
             let raw = p.bisect_verdict(word).await.map_err(crate::explain)?;
             let before: Option<Status> = serde_json::from_str(&raw)?;
             let after = before.and_then(|s| s.waiting.map(|w| w.probe));
-            let code = follow(p, after).await?;
+            let code = follow(p, after, None).await?;
+            offer_reboot(p, reboot).await?;
+            Ok(code)
+        }
+        BisectCmd::UndoVerdict { reboot } => {
+            let raw = p.bisect_undo_verdict().await.map_err(crate::explain)?;
+            let before: Option<Status> = serde_json::from_str(&raw)?;
+            let lines = before.as_ref().map_or(0, |s| s.log.len());
+            let after = before.and_then(|s| s.waiting.map(|w| w.probe));
+            // Wait for the session's thread to take it back, then follow it to the probe asked
+            // again.
+            let mut shown = lines;
+            for _ in 0..40 {
+                let raw = p.bisect_status().await.map_err(crate::explain)?;
+                let now: Option<Status> = serde_json::from_str(&raw)?;
+                if let Some(s) = now
+                    && s.log.len() > lines
+                {
+                    for line in &s.log[lines..] {
+                        println!("{line}");
+                    }
+                    shown = s.log.len();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            let code = follow(p, after, Some(shown)).await?;
             offer_reboot(p, reboot).await?;
             Ok(code)
         }
