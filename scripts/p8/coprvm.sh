@@ -10,7 +10,8 @@
 #      osreflog doctor, a dnf transaction (checkpoints around it), the unit's exposure
 #   2  osreflogd up at boot, the boot doctor ran, the boot checkpoint, a second transaction,
 #      warnings in osreflogd's journal; then the VM powers off
-# Everything the guest reports is in target/coprvm/serial.log; the COPRVM lines are printed.
+# What the test reports is in target/coprvm/guest.log (printed as it comes), the console in
+# serial.log.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 REL=44
@@ -56,7 +57,10 @@ write_files:
     permissions: "0755"
     content: |
       #!/bin/bash
-      exec > >(sed -u 's/^/COPRVM /' >/dev/ttyS0) 2>&1
+      # Its own virtio port: a login prompt on ttyS0 hangs up everything else writing there.
+      out=/dev/virtio-ports/coprvm
+      for _ in $(seq 30); do [ -e $out ] && break; sleep 1; done
+      exec > >(sed -u 's/^/COPRVM /' | tee -a /var/log/coprvm.log >$out) 2>&1
       S=/var/lib/coprvm-stage
       stage=$(cat $S 2>/dev/null || echo 1)
       fail() { echo "FAIL $*"; }
@@ -107,7 +111,7 @@ write_files:
   - path: /etc/systemd/system/coprvm-step.service
     content: |
       [Unit]
-      After=cloud-final.service network-online.target
+      After=multi-user.target network-online.target
       Wants=network-online.target
       [Service]
       Type=exec
@@ -125,19 +129,22 @@ trap 'kill $http 2>/dev/null' EXIT
 sleep 1
 kill -0 $http 2>/dev/null || die "port $PORT is taken (set COPRVM_PORT)"
 
-echo "booting (serial log: $WORK/serial.log; up to 40 minutes)…"
-tail -F -n +1 "$WORK/serial.log" 2>/dev/null | grep --line-buffered '^COPRVM' &
+echo "booting (test log: $WORK/guest.log; up to 40 minutes)…"
+: >"$WORK/guest.log"
+tail -F -n +1 "$WORK/guest.log" 2>/dev/null &
 tailer=$!
 trap 'kill $http $tailer 2>/dev/null' EXIT
 timeout 2400 qemu-system-x86_64 -machine q35,accel=kvm -cpu host -smp 4 -m 3072 \
     -drive file="$WORK/disk.qcow2",if=virtio \
     -nic user,model=virtio-net-pci \
     -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.2:$PORT/" \
+    -device virtio-serial-pci -chardev file,id=out,path="$WORK/guest.log" \
+    -device virtserialport,chardev=out,name=coprvm \
     -display none -serial file:"$WORK/serial.log" -monitor none \
     || echo "coprvm: qemu exited with $? (124: the 40-minute timeout)"
 sleep 1
-tr -d '\r' <"$WORK/serial.log" | grep -q '^COPRVM DONE' || die "the guest didn't finish: see $WORK/serial.log"
-if tr -d '\r' <"$WORK/serial.log" | grep '^COPRVM FAIL'; then
+grep -q '^COPRVM DONE' "$WORK/guest.log" || die "the guest didn't finish: see $WORK/guest.log and serial.log"
+if grep '^COPRVM FAIL' "$WORK/guest.log"; then
     die "failed checks above"
 fi
 echo "coprvm: all checks passed"
