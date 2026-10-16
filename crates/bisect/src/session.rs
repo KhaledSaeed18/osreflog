@@ -11,6 +11,9 @@ pub enum Tier {
     Nspawn,
     /// A VM booting the probe's own kernel: also kernel, modules, early boot.
     Vm,
+    /// The machine itself, rebooted once into the probe: also hardware, firmware, the GPU,
+    /// Wi-Fi. Verdicts by hand only (`bisect start`).
+    Metal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

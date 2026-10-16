@@ -48,6 +48,11 @@ fn main() -> anyhow::Result<()> {
         let spec = std::env::args().nth(2).unwrap_or_default();
         std::process::exit(osreflogd::runner::runner_main(&spec));
     }
+    // A metal probe's /boot step (arm, disarm), in its own transient unit.
+    if std::env::args().nth(1).as_deref() == Some(osreflogd::bootworker::FLAG) {
+        let job = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(osreflogd::bootworker::main(&job));
+    }
     // After every boot of the default: /boot back as it was, probe clones nobody waits for gone.
     if std::env::args().nth(1).as_deref() == Some(osreflogd::bootdoctor::FLAG) {
         let rest: Vec<String> = std::env::args().skip(2).collect();

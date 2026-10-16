@@ -415,6 +415,9 @@ fn run(spec: &Spec) -> RunResult {
         Tier::Nspawn if spec.manual => nspawn_manual(&probe, spec, &mut out),
         Tier::Nspawn => nspawn(&probe, spec, &mut out),
         Tier::Vm => vm(&probe, &top.join("osreflog/cache"), &run, spec, &mut out),
+        Tier::Metal => {
+            out.detail = "a metal probe boots the machine; the runner has nothing to run".into();
+        }
     }
     out.verdict = out.exit_code.map(Verdict::from_exit);
     // The daemon reads the result from the probe once this unit has ended.

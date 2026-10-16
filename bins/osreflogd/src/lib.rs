@@ -4,6 +4,7 @@ pub mod auth;
 pub mod bisect;
 pub mod blobs;
 pub mod bootdoctor;
+pub mod bootworker;
 pub mod capture;
 pub mod causes;
 pub mod delegation;

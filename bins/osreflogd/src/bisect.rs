@@ -540,6 +540,7 @@ impl Session<'_> {
         let (timeout_s, mem_mib) = match args.tier {
             Tier::Nspawn => (args.timeout_s.unwrap_or(120), 0),
             Tier::Vm => (args.timeout_s.unwrap_or(240), VM_MEM_MIB),
+            Tier::Metal => (0, 0),
         };
         let spec = Spec {
             device: self.engine.layout().device.clone(),
