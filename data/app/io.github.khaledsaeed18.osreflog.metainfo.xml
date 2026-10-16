@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.khaledsaeed18.osreflog</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>osreflog</name>
+  <summary>See what changed on this system, and what made each change</summary>
+  <developer id="io.github.khaledsaeed18">
+    <name>Khaled Saeed</name>
+  </developer>
+  <description>
+    <p>
+      osreflog keeps a history of every change to this system's configuration and the command,
+      service, package transaction or app that made it. When something breaks, it shows what
+      changed since it last worked, undoes a change path by path, or finds the change that broke
+      it by trying copies of the system in containers, VMs or a reboot of this machine.
+    </p>
+    <ul>
+      <li>A timeline of causes, each with the files it changed and what each change means</li>
+      <li>What changed between any two checkpoints, with package changes and unwatched gaps</li>
+      <li>Undo with a dry-run preview: anything that changed since is left alone</li>
+      <li>A bisect wizard: a test decides each copy, or you do</li>
+    </ul>
+    <p>The app talks to the osreflogd daemon, which needs a btrfs root filesystem.</p>
+  </description>
+  <launchable type="desktop-id">io.github.khaledsaeed18.osreflog.desktop</launchable>
+  <url type="homepage">https://github.com/KhaledSaeed18/osreflog</url>
+  <url type="bugtracker">https://github.com/KhaledSaeed18/osreflog/issues</url>
+  <url type="vcs-browser">https://github.com/KhaledSaeed18/osreflog</url>
+  <provides>
+    <binary>osreflog-app</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <branding>
+    <color type="primary" scheme_preference="light">#a7c7e7</color>
+    <color type="primary" scheme_preference="dark">#1c3a5e</color>
+  </branding>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-16">
+      <description>
+        <p>First release: the history browser, what changed since a checkpoint, undo with a preview, and the bisect wizard.</p>
+      </description>
+    </release>
+  </releases>
+</component>

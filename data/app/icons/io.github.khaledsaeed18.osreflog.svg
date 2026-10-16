@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3584e4"/>
+      <stop offset="1" stop-color="#1c71d8"/>
+    </linearGradient>
+  </defs>
+  <!-- base and shadow -->
+  <circle cx="64" cy="68" r="54" fill="#1a5fb4"/>
+  <circle cx="64" cy="64" r="54" fill="url(#face)"/>
+  <circle cx="64" cy="64" r="44" fill="#f6f5f4"/>
+  <!-- the history arrow: counter-clockwise, back in time (drawn clockwise, then mirrored) -->
+  <g transform="translate(128 0) scale(-1 1)">
+    <path d="M 64 30 A 34 34 0 1 1 31.2 55.2" fill="none" stroke="#241f31" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 21 49 L 33 64 L 42 47 Z" fill="#241f31"/>
+  </g>
+  <!-- three points in the history, the newest bright -->
+  <line x1="64" y1="44" x2="64" y2="84" stroke="#9a9996" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="64" cy="44" r="7" fill="#9a9996"/>
+  <circle cx="64" cy="64" r="7" fill="#9a9996"/>
+  <circle cx="64" cy="84" r="9" fill="#e66100"/>
+</svg>

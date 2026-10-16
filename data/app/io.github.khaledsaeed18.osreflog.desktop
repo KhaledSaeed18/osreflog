@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=osreflog
+GenericName=System History
+Comment=See what changed on this system, what made each change, and undo or bisect it
+Exec=osreflog-app
+Icon=io.github.khaledsaeed18.osreflog
+Terminal=false
+Type=Application
+Categories=GTK;GNOME;System;Monitor;
+Keywords=history;changes;undo;bisect;configuration;snapshot;checkpoint;regression;
+StartupNotify=true
