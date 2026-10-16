@@ -102,7 +102,7 @@ Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
 ## P7: Metal bisect
 - [x] Probe kernel/initramfs preparation, temporary BLS entry, ~~`grub2-reboot`~~ `grub2-editenv set next_entry` one-shot (boot gate, G2)
 - [x] Probe-side oneshot unit and verdict prompt (G3); manual verdicts (`bisect start / good / bad / skip / log`), the session saved in the ledger and resumed (P7a, with container probes)
-- [ ] `--tier metal`: arm, reboot, verdict in the probe, reboot, continue (P7b: built 2026-10-16, not yet run in the VM)
+- [x] `--tier metal`: arm, reboot, verdict in the probe, reboot, continue (P7b: a metal bisect in the test VM found the right cause in 3 probes, 7 boots)
 - [x] `--tier auto` with capability hints (`--needs kernel|hardware`) (P7c)
 
 **Exit:** one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.

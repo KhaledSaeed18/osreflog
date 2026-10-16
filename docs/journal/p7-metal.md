@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate passed 2026-10-16; P7a done; P7b and P7c built, not yet run** (no root overnight); P7d next
+- Status: **boot gate passed 2026-10-16; P7a, P7b, P7c done**; P7d (the exit, on the laptop) next
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate-passed-2026-10-16)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -203,3 +203,20 @@ Everything here is unit-tested; nothing ran as root, so nothing ran in the VM or
    ```
 3. The P6 seeded suite, since `bisect run` now drives the shared `TwoLevel` search: `sudo scripts/p6/seeded.sh`.
 4. Once 1–3 pass, **P7d on the laptop** (the P7 exit), by hand for the first time: `sudo scripts/p7/p7d-wifi.sh start`, then per probe reboot, `sudo osreflog-p7d-check` in the probe, reboot; at the end `sudo scripts/p7/p7d-wifi.sh finish`. The seeded regression is NetworkManager's `wifi.powersave` 2 → 3 among three harmless causes; the check reads `iw dev wlp2s0 get power_save` once Wi-Fi is up (dry-run tonight against this card with a stand-in verdict tool: "Power save: on (connection: connected)" → bad, as it should be today). `start --hands-free` adds a probe-side unit that judges and reboots and a default-side one that reboots into each armed probe (at most 12 reboots), for later runs.
+
+### 2026-10-16 (morning): the runs
+
+1. **P7b in the test VM** (`scripts/p7/p7b-step.sh`, guest at 1280 MiB: 1681 MiB was free, too little for 1536 + 256): **found #132**, the cause that added the bad line, in **3 probes and 7 boots**, through the real daemon and CLI installed in the VM.
+
+   | Boot | |
+   | ---- | - |
+   | 1, default | this build installed; four causes seeded between c000017 and c000018; `bisect start --tier metal --no-reboot`: probe 1 (the bad end) armed |
+   | 2, probe 1 | `/` = `p1`, `/home` = `p1-home`, osreflogd inactive, marker there; verdict `bad` with `osreflog-verdict` |
+   | 3, default | boot doctor: entry removed, default untouched since probe 1 was armed, "probe 1 booted"; the daemon read the verdict and armed probe 2 |
+   | 4, probe 2 | verdict `good` with `osreflog bisect good --no-reboot` (the probe's own new CLI) |
+   | 5, default | same; probe 3 armed |
+   | 6, probe 3 | verdict `bad` with `osreflog-verdict` |
+   | 7, default | the daemon read it: first bad cause **#132**, between c000017 and c000018, no approximations; nothing left on `/boot` |
+
+   Each boot of the VM took 21–24 s to `running`.
+2. **P7a again on the laptop** with this build: **found #625** in 3 probes, across an osreflogd restart, no container left. The 3 s pause before stopping a container works (a verdict given on the host went through cleanly); the test script's own `systemd-run -M` still prints "Connection reset by peer" when the container it ran the verdict in shuts down, which is the script's connection, not the verdict's.
