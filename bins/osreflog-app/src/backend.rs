@@ -19,6 +19,10 @@ pub enum Request {
     /// What changed from one checkpoint to another (`@{now}`: the live system). `all`: package
     /// files and noise too.
     Diff { from: String, to: String, all: bool },
+    /// What undoing a cause would do (nothing is written).
+    UndoPlan(i64),
+    /// Undo a cause exactly as the preview with this digest showed it; polkit asks.
+    Undo { id: i64, digest: String },
 }
 
 /// Why a call has no answer: the daemon isn't there, or something else went wrong.
@@ -50,6 +54,8 @@ pub enum Reply {
         all: bool,
         result: Result<Box<DiffReport>, Failure>,
     },
+    UndoPlan(i64, Result<Box<osreflog_undo::Preview>, Failure>),
+    Undone(i64, Result<Box<osreflog_undo::Applied>, Failure>),
 }
 
 /// Starts the thread. Requests go in through the first channel, replies come out of the second.
@@ -103,6 +109,8 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
         let reply = match (&client, req) {
             (None, Request::Refresh) => Reply::History(Err(unreachable_bus())),
             (None, Request::Show(id)) => Reply::Detail(id, Err(unreachable_bus())),
+            (None, Request::UndoPlan(id)) => Reply::UndoPlan(id, Err(unreachable_bus())),
+            (None, Request::Undo { id, .. }) => Reply::Undone(id, Err(unreachable_bus())),
             (None, Request::Diff { from, to, all }) => Reply::Diff {
                 from,
                 to,
@@ -113,6 +121,17 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             (Some(c), Request::Show(id)) => {
                 Reply::Detail(id, c.show(id).await.map_err(Failure::from))
             }
+            (Some(c), Request::UndoPlan(id)) => Reply::UndoPlan(
+                id,
+                c.undo_plan(id).await.map(Box::new).map_err(Failure::from),
+            ),
+            (Some(c), Request::Undo { id, digest }) => Reply::Undone(
+                id,
+                c.undo(id, &digest)
+                    .await
+                    .map(Box::new)
+                    .map_err(Failure::from),
+            ),
             (Some(c), Request::Diff { from, to, all }) => {
                 let result = c
                     .diff(&from, &to, all)
@@ -131,6 +150,8 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             Reply::History(r) => r.as_ref().err(),
             Reply::Detail(_, r) => r.as_ref().err(),
             Reply::Diff { result, .. } => result.as_ref().err(),
+            Reply::UndoPlan(_, r) => r.as_ref().err(),
+            Reply::Undone(_, r) => r.as_ref().err(),
         };
         if failed.is_some_and(|f| f.down) {
             client = None;

@@ -1024,6 +1024,7 @@ dependencies = [
  "libadwaita",
  "osreflog-client",
  "osreflog-model",
+ "osreflog-undo",
  "tokio",
 ]
 

@@ -57,7 +57,13 @@ fn day_of(offset_days: i64) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Selected {
     Cause(i64),
-    Diff { from: String, to: String, all: bool },
+    Diff {
+        from: String,
+        to: String,
+        all: bool,
+    },
+    /// The undo of a cause: its preview, then its result.
+    Undo(i64),
 }
 
 /// What a list shows now (its keys and the day it was built on), so an unchanged refresh
@@ -66,6 +72,7 @@ type Shown<T> = RefCell<Option<(Vec<T>, String)>>;
 
 /// The widgets the reply loop updates.
 struct Ui {
+    window: adw::ApplicationWindow,
     split: adw::NavigationSplitView,
     title: adw::WindowTitle,
     sidebar: gtk::Stack,
@@ -217,6 +224,7 @@ fn build(app: &adw::Application) {
     window.add_breakpoint(narrow);
 
     let ui = Rc::new(Ui {
+        window: window.clone(),
         split,
         title,
         sidebar,
@@ -244,6 +252,16 @@ fn build(app: &adw::Application) {
                         show_detail(&ui2, id, r);
                     }
                 }
+                Reply::UndoPlan(id, r) => {
+                    if *ui2.selected.borrow() == Some(Selected::Undo(id)) {
+                        show_undo_plan(&ui2, id, r);
+                    }
+                }
+                Reply::Undone(id, r) => {
+                    if *ui2.selected.borrow() == Some(Selected::Undo(id)) {
+                        show_undone(&ui2, id, r);
+                    }
+                }
                 Reply::Diff {
                     from,
                     to,
@@ -263,7 +281,7 @@ fn build(app: &adw::Application) {
         }
     });
     let _ = requests.try_send(Request::Refresh);
-    // Development: open a page at start, `since:c000134` or `cause:765` (input through GTK's
+    // Development: open a page at start, `since:c000134`, `cause:765` or `undo:765` (input through GTK's
     // Broadway backend, used to look at the window from a browser, drops clicks).
     if let Ok(open) = std::env::var("OSREFLOG_APP_OPEN") {
         match open.split_once(':') {
@@ -273,7 +291,14 @@ fn build(app: &adw::Application) {
                     select_cause(&ui, id);
                 }
             }
-            _ => eprintln!("osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint> or cause:<id>"),
+            Some(("undo", id)) => {
+                if let Ok(id) = id.parse() {
+                    select_undo(&ui, id);
+                }
+            }
+            _ => eprintln!(
+                "osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint>, cause:<id> or undo:<id>"
+            ),
         }
     }
     let refresh = requests.clone();
@@ -489,6 +514,15 @@ fn show_detail(ui: &Rc<Ui>, id: i64, r: Result<CauseDetail, Failure>) {
         .set_title(&format!("#{} {}", d.cause.id, d.cause.label));
     ui.detail.append(&heading(&d.cause.label));
     ui.detail.append(&facts_group(view::facts(&d, local_full)));
+    let undo = gtk::Button::builder()
+        .label("Undo…")
+        .tooltip_text("See what undoing this cause would do; nothing changes until you confirm")
+        .halign(gtk::Align::Start)
+        .build();
+    undo.add_css_class("pill");
+    let ui3 = Rc::clone(ui);
+    undo.connect_clicked(move |_| select_undo(&ui3, id));
+    ui.detail.append(&undo);
 
     let changes = adw::PreferencesGroup::builder()
         .title(format!("Changes ({})", d.changes.len()))
@@ -652,4 +686,201 @@ fn diff_files(ui: &Rc<Ui>, from: &str, all: bool, r: &DiffReport) {
         note.add_css_class("dim-label");
         ui.detail.append(&note);
     }
+}
+
+/// Asks what undoing a cause would do. Nothing is written by this.
+fn select_undo(ui: &Rc<Ui>, id: i64) {
+    *ui.selected.borrow_mut() = Some(Selected::Undo(id));
+    ui.busy
+        .set_title(&format!("Checking what undoing #{id} would do…"));
+    ui.busy
+        .set_description(Some("Nothing changes until you confirm."));
+    ui.content.set_visible_child_name("busy");
+    ui.split.set_show_content(true);
+    let _ = ui.requests.try_send(Request::UndoPlan(id));
+}
+
+fn verdict_icon(verdict: &str) -> &'static str {
+    match verdict {
+        "restore" => "edit-undo-symbolic",
+        "same" => "emblem-ok-symbolic",
+        "conflict" => "dialog-warning-symbolic",
+        _ => "action-unavailable-symbolic",
+    }
+}
+
+fn show_undo_plan(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Preview>, Failure>) {
+    clear(&ui.detail);
+    ui.content_page.set_title(&format!("Undo #{id}"));
+    let p = match r {
+        Ok(p) => p,
+        Err(f) => {
+            failure_page(
+                ui,
+                &format!("What undoing #{id} would do couldn't be worked out"),
+                f,
+            );
+            return;
+        }
+    };
+    ui.detail
+        .append(&heading(&format!("Undo #{} {}", p.cause.id, p.cause.label)));
+    let summary = gtk::Label::builder()
+        .label(view::undo_summary(&p))
+        .wrap(true)
+        .xalign(0.0)
+        .selectable(true)
+        .build();
+    ui.detail.append(&summary);
+
+    let rows = view::undo_rows(&p);
+    if !rows.is_empty() {
+        let group = adw::PreferencesGroup::builder()
+            .title(format!("Paths ({})", rows.len()))
+            .build();
+        for row in &rows {
+            let w = match &row.diff {
+                Some(d) => file_row(
+                    &row.path,
+                    &row.what,
+                    std::slice::from_ref(d),
+                    rows.len() <= 5,
+                ),
+                None => file_row(&row.path, &row.what, &[], false),
+            };
+            let icon = gtk::Image::from_icon_name(verdict_icon(row.verdict));
+            if let Some(a) = w.downcast_ref::<adw::ActionRow>() {
+                a.add_prefix(&icon);
+            } else if let Some(e) = w.downcast_ref::<adw::ExpanderRow>() {
+                e.add_prefix(&icon);
+            }
+            group.add(&w);
+        }
+        ui.detail.append(&group);
+    }
+    if !p.skipped.is_empty() {
+        let group = adw::PreferencesGroup::builder()
+            .title("Left alone")
+            .description("Paths of this cause undo never touches")
+            .build();
+        for s in &p.skipped {
+            group.add(&action_row(&s.path, &s.reason));
+        }
+        ui.detail.append(&group);
+    }
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let back = gtk::Button::with_label("Back to the cause");
+    back.add_css_class("pill");
+    let ui3 = Rc::clone(ui);
+    back.connect_clicked(move |_| select_cause(&ui3, id));
+    buttons.append(&back);
+    let n = p.to_restore();
+    if n > 0 && p.delegated.is_none() {
+        let apply = gtk::Button::with_label(&format!(
+            "Undo {n} change{}…",
+            if n == 1 { "" } else { "s" }
+        ));
+        apply.add_css_class("pill");
+        apply.add_css_class("destructive-action");
+        let ui3 = Rc::clone(ui);
+        let digest = p.digest.clone();
+        apply.connect_clicked(move |_| confirm_undo(&ui3, id, n, &digest));
+        buttons.append(&apply);
+    }
+    ui.detail.append(&buttons);
+    ui.content.set_visible_child_name("detail");
+}
+
+/// The last word before anything is written: polkit then asks for the password.
+fn confirm_undo(ui: &Rc<Ui>, id: i64, n: usize, digest: &str) {
+    let dialog = adw::AlertDialog::new(
+        Some(&format!(
+            "Undo {n} change{}?",
+            if n == 1 { "" } else { "s" }
+        )),
+        Some(
+            "osreflog takes a checkpoint first. Each path is checked again as it is written: \
+             anything that changed in the meantime is left alone. Replaced versions go to the \
+             attic, and the undo is recorded as a cause of its own, so it can be undone too.",
+        ),
+    );
+    dialog.add_responses(&[("cancel", "Cancel"), ("undo", "Undo")]);
+    dialog.set_response_appearance("undo", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let ui3 = Rc::clone(ui);
+    let digest = digest.to_owned();
+    dialog.connect_response(None, move |_, response| {
+        if response != "undo" {
+            return;
+        }
+        *ui3.selected.borrow_mut() = Some(Selected::Undo(id));
+        ui3.busy.set_title(&format!("Undoing #{id}…"));
+        ui3.busy.set_description(Some(
+            "Your system asks for an administrator's password: every undo needs it.",
+        ));
+        ui3.content.set_visible_child_name("busy");
+        let _ = ui3.requests.try_send(Request::Undo {
+            id,
+            digest: digest.clone(),
+        });
+    });
+    dialog.present(Some(&ui.window));
+}
+
+fn show_undone(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Applied>, Failure>) {
+    clear(&ui.detail);
+    let a = match r {
+        Ok(a) => a,
+        Err(f) => {
+            failure_page(ui, &format!("#{id} wasn't undone"), f);
+            let again = gtk::Button::with_label("Back to the preview");
+            again.add_css_class("pill");
+            again.set_halign(gtk::Align::Center);
+            let ui3 = Rc::clone(ui);
+            again.connect_clicked(move |_| select_undo(&ui3, id));
+            ui.detail.append(&again);
+            return;
+        }
+    };
+    let rows = view::applied_rows(&a);
+    let ok = rows.iter().filter(|(_, _, ok)| *ok).count();
+    ui.detail.append(&heading(&format!(
+        "Undone: #{id} ({ok} of {} paths)",
+        rows.len()
+    )));
+    let mut facts = vec![(
+        "Checkpoint first",
+        format!("{} (verified before anything was written)", a.pre_undo.name),
+    )];
+    facts.push(("Replaced versions", a.report.attic.clone()));
+    if a.reloaded_systemd {
+        facts.push((
+            "systemd",
+            "reloaded: unit files or enablement links changed".into(),
+        ));
+    }
+    ui.detail.append(&facts_group(facts));
+    let group = adw::PreferencesGroup::builder().title("Paths").build();
+    for (path, line, ok) in rows {
+        let row = action_row(&path, &line);
+        row.add_prefix(&gtk::Image::from_icon_name(if ok {
+            "emblem-ok-symbolic"
+        } else {
+            "dialog-warning-symbolic"
+        }));
+        group.add(&row);
+    }
+    ui.detail.append(&group);
+    if let Some(cause) = a.undo_cause {
+        let open = gtk::Button::with_label(&format!("Open #{cause}, the undo itself"));
+        open.set_tooltip_text(Some("Undoing it puts the change back"));
+        open.add_css_class("pill");
+        open.set_halign(gtk::Align::Start);
+        let ui3 = Rc::clone(ui);
+        open.connect_clicked(move |_| select_cause(&ui3, cause));
+        ui.detail.append(&open);
+    }
+    ui.content.set_visible_child_name("detail");
 }

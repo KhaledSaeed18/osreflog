@@ -420,6 +420,129 @@ pub fn diff_groups(r: &DiffReport) -> Vec<(&'static str, Vec<DiffRow>)> {
         .collect()
 }
 
+/// One path of an undo preview: what undo would do with it, and the text diff when it's a
+/// text file being put back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoRow {
+    pub path: String,
+    pub what: String,
+    /// `restore`, `same`, `conflict` or `refused`, for the row's icon and style.
+    pub verdict: &'static str,
+    pub diff: Option<String>,
+}
+
+/// An undo preview as rows, in the order the daemon gave them.
+#[must_use]
+pub fn undo_rows(p: &osreflog_undo::Preview) -> Vec<UndoRow> {
+    use osreflog_undo::{State, Verdict};
+    p.steps
+        .iter()
+        .map(|step| {
+            let (verdict, what) = match &step.verdict {
+                Verdict::Restore => (
+                    "restore",
+                    match &step.restore {
+                        State::Absent => "remove it (it goes to the attic)".to_owned(),
+                        r => format!("put back the {r} it was before"),
+                    },
+                ),
+                Verdict::AlreadyUndone => ("same", "already as it was before".to_owned()),
+                Verdict::Conflict => (
+                    "conflict",
+                    match &step.current {
+                        Ok(c) => format!(
+                            "changed after this cause (now {c}, the cause left {}): left alone",
+                            step.expect
+                        ),
+                        Err(e) => format!("can't be read ({e}): left alone"),
+                    },
+                ),
+                Verdict::Refused { reason } => ("refused", format!("never undone: {reason}")),
+            };
+            let diff = match (&step.verdict, &step.current_text, &step.restore_text) {
+                (Verdict::Restore, Some(now), Some(then)) => Some(
+                    osreflog_undo::textdiff::unified(now, then, 2)
+                        .lines()
+                        .take(60)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                _ => None,
+            };
+            UndoRow {
+                path: step.path.clone(),
+                what,
+                verdict,
+                diff: diff.filter(|d| !d.is_empty()),
+            }
+        })
+        .collect()
+}
+
+/// The line above an undo preview's paths.
+#[must_use]
+pub fn undo_summary(p: &osreflog_undo::Preview) -> String {
+    use osreflog_undo::Verdict;
+    if let Some(osreflog_undo::Delegation::Dnf { transaction, .. }) = &p.delegated {
+        return format!(
+            "A package transaction: dnf undoes it, with the package database and scriptlets. Run  sudo dnf5 history undo {transaction}  in a terminal."
+        );
+    }
+    let count = |v: fn(&Verdict) -> bool| p.steps.iter().filter(|s| v(&s.verdict)).count();
+    let restore = p.to_restore();
+    let conflicts = count(|v| *v == Verdict::Conflict);
+    let refused = count(|v| matches!(v, Verdict::Refused { .. }));
+    let same = count(|v| *v == Verdict::AlreadyUndone);
+    if p.steps.is_empty() {
+        return "Nothing recorded for this cause can be undone.".to_owned();
+    }
+    let mut parts = if restore > 0 {
+        vec![format!("{restore} to put back")]
+    } else {
+        Vec::new()
+    };
+    if conflicts > 0 {
+        parts.push(format!("{conflicts} changed since (left alone)"));
+    }
+    if refused > 0 {
+        parts.push(format!("{refused} never undone"));
+    }
+    if same > 0 {
+        parts.push(format!("{same} already as before"));
+    }
+    if restore == 0 {
+        return format!("Nothing to put back: {}.", parts.join(", "));
+    }
+    format!("Nothing has changed yet: {}.", parts.join(", "))
+}
+
+/// What an applied undo did, path by path: (path, outcome, ok).
+#[must_use]
+pub fn applied_rows(a: &osreflog_undo::Applied) -> Vec<(String, String, bool)> {
+    use osreflog_undo::Outcome;
+    a.report
+        .steps
+        .iter()
+        .map(|s| {
+            let (line, ok) = match &s.outcome {
+                Outcome::Restored { warnings } if warnings.is_empty() => {
+                    ("put back".to_owned(), true)
+                }
+                Outcome::Restored { warnings } => {
+                    (format!("put back ({})", warnings.join("; ")), true)
+                }
+                Outcome::AlreadyUndone => ("already as it was before".to_owned(), true),
+                Outcome::Conflict { current, reason } => {
+                    (format!("left alone: {reason} (now {current})"), false)
+                }
+                Outcome::Refused { reason } => (format!("refused: {reason}"), false),
+                Outcome::Failed { error } => (format!("failed: {error}"), false),
+            };
+            (s.path.clone(), line, ok)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -681,6 +804,77 @@ mod tests {
         assert_eq!(
             g[1].1[0].subtitle,
             "changed file (content) · no recorded cause"
+        );
+    }
+
+    fn preview(steps: Vec<osreflog_undo::preview::PreviewStep>) -> osreflog_undo::Preview {
+        osreflog_undo::Preview {
+            cause: cause(5, 1000, "command", steps.len() as u64, 0),
+            digest: "d".into(),
+            steps,
+            skipped: vec![],
+            delegated: None,
+        }
+    }
+
+    #[test]
+    fn an_undo_preview_says_what_would_happen() {
+        use osreflog_undo::State;
+        use osreflog_undo::preview::{PreviewStep, Verdict};
+        let file = |h: &str| State::File { hash: h.into() };
+        let p = preview(vec![
+            PreviewStep {
+                path: "/etc/a.conf".into(),
+                expect: file("aaaa"),
+                restore: file("bbbb"),
+                current: Ok(file("aaaa")),
+                verdict: Verdict::Restore,
+                current_text: Some("x = 2\n".into()),
+                restore_text: Some("x = 1\n".into()),
+            },
+            PreviewStep {
+                path: "/etc/new.conf".into(),
+                expect: file("cccc"),
+                restore: State::Absent,
+                current: Ok(file("cccc")),
+                verdict: Verdict::Restore,
+                current_text: None,
+                restore_text: None,
+            },
+            PreviewStep {
+                path: "/etc/b.conf".into(),
+                expect: file("dddd"),
+                restore: file("eeee"),
+                current: Ok(file("ffff")),
+                verdict: Verdict::Conflict,
+                current_text: None,
+                restore_text: None,
+            },
+        ]);
+        let rows = undo_rows(&p);
+        assert_eq!(rows[0].verdict, "restore");
+        assert!(
+            rows[0].diff.as_deref().unwrap().contains("-x = 2"),
+            "{:?}",
+            rows[0].diff
+        );
+        assert!(rows[0].diff.as_deref().unwrap().contains("+x = 1"));
+        assert_eq!(rows[1].what, "remove it (it goes to the attic)");
+        assert_eq!(rows[2].verdict, "conflict");
+        assert!(rows[2].what.starts_with("changed after this cause"));
+        assert_eq!(
+            undo_summary(&p),
+            "Nothing has changed yet: 2 to put back, 1 changed since (left alone)."
+        );
+        let mut dnf = preview(vec![]);
+        dnf.delegated = Some(osreflog_undo::Delegation::Dnf {
+            transaction: 53,
+            description: String::new(),
+        });
+        assert!(undo_summary(&dnf).contains("sudo dnf5 history undo 53"));
+        assert_eq!(
+            undo_summary(&preview(vec![])),
+            "Nothing recorded for this cause can be undone."
         );
     }
 
