@@ -9,6 +9,7 @@ pub mod apply;
 pub mod beneath;
 pub mod plan;
 pub mod preview;
+pub mod textdiff;
 
 pub use apply::{Outcome, Report, Root, StepReport, apply, current};
 pub use plan::{Meta, Plan, State, Step, Version};

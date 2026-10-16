@@ -3,7 +3,6 @@
 mod bisect;
 mod doctor;
 mod format;
-mod textdiff;
 mod time;
 mod user_undo;
 

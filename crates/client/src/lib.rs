@@ -133,6 +133,24 @@ impl Client {
         parse(&self.proxy.log(limit).await.map_err(explain)?)
     }
 
+    /// What undoing cause `id` would do, judged against the system as it is now. Nothing is
+    /// written.
+    ///
+    /// # Errors
+    /// If the call fails or its answer doesn't parse.
+    pub async fn undo_plan(&self, id: i64) -> Result<osreflog_undo::Preview, ClientError> {
+        parse(&self.proxy.undo_plan(id).await.map_err(explain)?)
+    }
+
+    /// Undoes cause `id` exactly as the preview with `digest` showed it (a different plan is
+    /// refused). polkit asks for an administrator's password every time.
+    ///
+    /// # Errors
+    /// If the call is refused or fails, or its answer doesn't parse.
+    pub async fn undo(&self, id: i64, digest: &str) -> Result<osreflog_undo::Applied, ClientError> {
+        parse(&self.proxy.undo(id, digest).await.map_err(explain)?)
+    }
+
     /// # Errors
     /// If the call fails or its answer doesn't parse.
     pub async fn diff(&self, from: &str, to: &str, all: bool) -> Result<DiffReport, ClientError> {

@@ -347,7 +347,7 @@ pub fn why(path: &str, entries: &[WhyEntry]) {
         }
         match (&e.before, &e.after) {
             (Some(before), Some(after)) => {
-                let d = crate::textdiff::unified(before, after, 3);
+                let d = osreflog_undo::textdiff::unified(before, after, 3);
                 if d.is_empty() {
                     println!("  (content unchanged)");
                 } else {
@@ -416,7 +416,10 @@ pub fn undo_preview(p: &osreflog_undo::Preview) {
         if step.verdict == Verdict::Restore
             && let (Some(now), Some(then)) = (&step.current_text, &step.restore_text)
         {
-            for line in crate::textdiff::unified(now, then, 2).lines().take(40) {
+            for line in osreflog_undo::textdiff::unified(now, then, 2)
+                .lines()
+                .take(40)
+            {
                 println!("      {line}");
             }
         }
