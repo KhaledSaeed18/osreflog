@@ -1,8 +1,8 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate in progress** (G1–G4 done)
+- Status: **boot gate passed 2026-10-16**; P7 proper (P7a–P7d) next
 - Started: 2026-10-15
-- Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate)
+- Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate-passed-2026-10-16)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
 
 ## Pre-flight (2026-10-15)
@@ -134,3 +134,24 @@ The host side now reports `ok   g3-step.sh` (the `$LINES` fix from G2 confirmed)
 | 3, default | the doctor had run at boot (`success`, exit 0): removed the probe entry and 2 kernel files; default untouched since probe 3 was armed; "probe 3 booted (kernel 7.2.9…)"; removed p9, kept p3 and p3-home. Then by hand: probe 3 re-armed, `--dry-run` changed nothing; the real run disarmed it ("did not boot, next_entry still set"); with `pending.json` gone, p3 and p3-home were deleted |
 
 Found on the way: `osreflog doctor --boot` first ran the doctor through `systemd-run --pipe --wait`, and from a service that failed with "Failed to start transient service unit: Connection reset by peer", P6's finding #1 again. As root, systemd-run talks to systemd's private socket, and that connection is reset when the caller is a service. The CLI now runs the doctor under `unshare --mount --propagation private` (it refuses a mount that would propagate either way); the boot-time unit keeps the full sandbox. `testvm.sh flow` now starts from a clean VM (no probe entry, `next_entry`, test state or clones left by an earlier run that stopped half-way).
+
+### 2026-10-16: G5, the gate run
+
+`scripts/p7/g5-step.sh`: four probes in a row, each made as the metal tier will make it (record the default; snapshot `/` and home; prepare the clone; plan and install the kernel; entry; `pending.json`; arm), the verdict written by the probe into itself and read back from the clone on the default. `testvm.sh` now gives a VM that prints `RESET-ME` a hard reset (`system_reset`, the power button) five seconds later.
+
+| Probe | What it did | Back on the default |
+| ----- | ----------- | ------------------- |
+| 1 | this kernel, reused from `/boot`; `/` and `/home` its own; default verified from inside; verdict `bad` | doctor at boot removed the entry, default untouched since arming, "probe 1 booted", clone kept until released; verdict `bad` read back; released, clones deleted |
+| 2 | its own **7.2.8** (newer modules removed from the clone): image copied to `/boot/osreflog`, initramfs built from the clone (22 s); booted under **Secure Boot**; verdict `good` | doctor removed the entry and both kernel files; verdict `good` read back |
+| 3 | **hangs** in early boot (a unit before `sysinit.target` that never ends); the host reset the VM | the next boot was the default (GRUB had cleared `next_entry` when it started the probe); "probe 3 has no boot record: it never booted" |
+| 4 | **crashes the kernel** (`echo c > /proc/sysrq-trigger`, "Kernel panic - not syncing: sysrq triggered crash") | `panic=10` rebooted it with no help, into the default |
+
+After every probe: the default entry verified against the record taken at arming, `/boot` clean, the doctor's run at boot `success`. At the end nothing was left on `/boot` or in `osreflog/probes/`. Every default boot reached `running` in 11.6–13.2 s. Host: `ok   g5-step.sh`.
+
+One thing for P7b: probe 4 has a boot record although it crashed, because the record unit runs after `local-fs.target`, before the crash. A boot record means the probe's root mounted, not that its boot finished. The bisect should treat a probe without a verdict as **skip** (with "it crashed or was reset" when there is a boot record and "it never booted" when there isn't), never as good or bad.
+
+## The boot gate, passed
+
+All five items hold in the test VM ([roadmap](../roadmap.md#boot-gate-passed-2026-10-16)); [recovery.md](../recovery.md) says how to get back by hand. The test VM image stays in `osreflog/testvm` for P7a/P7b development (`sudo scripts/p7/testvm.sh delete` removes it).
+
+What hasn't run on this laptop yet: anything that writes to the real `/boot`. Before P7d's real bisect, `install-dev.sh` puts `osreflog-boot-doctor.service` in place, and the first metal probe on the laptop is armed by hand and watched.

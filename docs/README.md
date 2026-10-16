@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** the boot gate and P7 (metal bisect) next; P6 closed 2026-10-15 ([journal](./journal/p6-bisect.md)): bisect finds the right cause in all 5 seeded scenarios, nspawn probes under a second, VM probes about 14 s at about 430 MiB. Last updated 2026-10-15.
+**Status:** P7 (metal bisect) next; the boot gate passed 2026-10-16 ([journal](./journal/p7-metal.md)): in a Secure Boot test VM built from this machine, four probes in a row (one on its own older kernel, one that hangs, one that panics) all came back to the untouched default, and the boot doctor cleaned up after each. Last updated 2026-10-16.
 
 ## Reading order
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **BOOT GATE next, then P7 (metal bisect).** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P7 (metal bisect) next.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -91,13 +91,13 @@ Before any code writes to the live `/`:
 
 **Exit:** the seeded suite finds the right cause in ≤ ⌈log₂ n⌉ + 1 probes; an nspawn probe takes < 5 s; a vm probe takes < 30 s and stays within 768 MiB. **Met** ([journal](./journal/p6-bisect.md)): 5/5 scenarios (config line, masked unit, sysctl, dnf transaction, kernel module option in a VM) found the right cause within the bound; nspawn probes ≤ 0.9 s, vm probes ≤ 14 s at ≤ 436 MiB. Manual verdicts (`start/good/bad/skip`) move to P7 with the metal tier; the SELinux-boolean scenario wasn't built (neither tier runs SELinux).
 
-## BOOT GATE
-Before any probe boots on real hardware:
-- [ ] The full metal flow works inside a **nested** test VM (a VM whose disk is a Fedora btrfs install, using the same GRUB/BLS)
-- [ ] The default entry is verified untouched after every probe (checksum of `grubenv` saved_entry + entry file)
-- [ ] A hung or panicked probe returns to the default on the next power cycle (tested in the VM)
-- [ ] `osreflog doctor --boot` cleans up leftovers and is run automatically at every boot
-- [ ] A recovery note in the docs: how to boot the default entry by hand from the GRUB menu
+## BOOT GATE (passed 2026-10-16)
+Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
+- [x] The full metal flow works inside a **nested** test VM (a VM whose disk is a Fedora btrfs install, using the same GRUB/BLS): built from a checkpoint of this machine, OVMF with Secure Boot; four probes in a row, including one on its own older kernel installed in `/boot/osreflog`
+- [x] The default entry is verified untouched after every probe (checksum of `grubenv` saved_entry + entry file)
+- [x] A hung or panicked probe returns to the default on the next power cycle (tested in the VM): a probe stuck in early boot and hard-reset, and a kernel crash rebooting itself through `panic=10`
+- [x] `osreflog doctor --boot` cleans up leftovers and is run automatically at every boot (`osreflog-boot-doctor.service`)
+- [x] A recovery note in the docs: how to boot the default entry by hand from the GRUB menu ([recovery.md](./recovery.md))
 
 ## P7: Metal bisect
 - Probe kernel/initramfs preparation, temporary BLS entry, `grub2-reboot` one-shot
