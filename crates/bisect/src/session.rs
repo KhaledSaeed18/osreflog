@@ -119,3 +119,80 @@ pub struct Status {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
 }
+
+/// What a test needs from a probe, for `--tier auto`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Need {
+    /// The kernel, its modules, early boot: a VM at least.
+    Kernel,
+    /// This machine's hardware or firmware (Wi-Fi, GPU, suspend): only a metal probe.
+    Hardware,
+}
+
+impl Tier {
+    /// The cheapest tier that has everything `needs` asks for. `manual`: a person gives the
+    /// verdicts (`bisect start`), where a VM isn't offered (nothing to enter) and kernel needs
+    /// go to metal. A hardware need without a person has no tier: a metal probe can't judge
+    /// itself.
+    ///
+    /// # Errors
+    /// The reason, when no tier fits.
+    pub fn auto(needs: &[Need], manual: bool) -> Result<Tier, String> {
+        let hardware = needs.contains(&Need::Hardware);
+        let kernel = needs.contains(&Need::Kernel);
+        match (manual, hardware, kernel) {
+            (false, true, _) => Err(
+                "a test that needs this machine's hardware needs a person to judge it: osreflog bisect start --tier metal"
+                    .into(),
+            ),
+            (false, false, true) => Ok(Tier::Vm),
+            (false | true, false, false) => Ok(Tier::Nspawn),
+            (true, _, _) => Ok(Tier::Metal),
+        }
+    }
+
+    /// The next tier up, to try when a regression doesn't reproduce in this one.
+    #[must_use]
+    pub fn next(self, manual: bool) -> Option<Tier> {
+        match (self, manual) {
+            (Tier::Nspawn, false) => Some(Tier::Vm),
+            (Tier::Nspawn | Tier::Vm, true) => Some(Tier::Metal),
+            // From a VM, metal needs a person: suggested as bisect start instead.
+            (Tier::Vm, false) | (Tier::Metal, _) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_picks_the_cheapest_tier_that_fits() {
+        assert_eq!(Tier::auto(&[], false), Ok(Tier::Nspawn));
+        assert_eq!(Tier::auto(&[Need::Kernel], false), Ok(Tier::Vm));
+        assert!(Tier::auto(&[Need::Hardware], false).is_err());
+        assert!(Tier::auto(&[Need::Kernel, Need::Hardware], false).is_err());
+        assert_eq!(Tier::auto(&[], true), Ok(Tier::Nspawn));
+        assert_eq!(Tier::auto(&[Need::Kernel], true), Ok(Tier::Metal));
+        assert_eq!(Tier::auto(&[Need::Hardware], true), Ok(Tier::Metal));
+    }
+
+    #[test]
+    fn next_tier_up() {
+        assert_eq!(Tier::Nspawn.next(false), Some(Tier::Vm));
+        assert_eq!(Tier::Vm.next(false), None);
+        assert_eq!(Tier::Nspawn.next(true), Some(Tier::Metal));
+        assert_eq!(Tier::Metal.next(true), None);
+    }
+
+    #[test]
+    fn metal_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Tier::Metal).unwrap(), "\"metal\"");
+        assert_eq!(
+            serde_json::to_string(&Need::Hardware).unwrap(),
+            "\"hardware\""
+        );
+    }
+}

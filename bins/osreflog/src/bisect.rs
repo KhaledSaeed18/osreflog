@@ -13,14 +13,35 @@ use crate::time::local;
 
 #[derive(Clone, Copy, ValueEnum)]
 pub enum TierArg {
+    /// The cheapest tier that has what --needs asks for: nspawn, or vm for --needs kernel.
+    Auto,
     /// A container: binaries, libraries, config, units (seconds per probe).
     Nspawn,
     /// A VM booting the probe's own kernel: also kernel, modules, boot (tens of seconds).
     Vm,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum NeedArg {
+    /// The kernel, its modules, early boot.
+    Kernel,
+    /// This machine's hardware or firmware: Wi-Fi, GPU, suspend.
+    Hardware,
+}
+
+fn needs(list: &[NeedArg]) -> Vec<osreflog_bisect::Need> {
+    list.iter()
+        .map(|n| match n {
+            NeedArg::Kernel => osreflog_bisect::Need::Kernel,
+            NeedArg::Hardware => osreflog_bisect::Need::Hardware,
+        })
+        .collect()
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum ManualTier {
+    /// nspawn, or metal for --needs kernel or --needs hardware.
+    Auto,
     /// A container on the copy, entered with machinectl shell.
     Nspawn,
     /// A reboot of this machine into the copy, once.
@@ -51,8 +72,12 @@ pub enum BisectCmd {
         /// A checkpoint where it fails; default the newest.
         #[arg(long, default_value = "@{0}")]
         bad: String,
-        #[arg(long, value_enum, default_value = "nspawn")]
+        #[arg(long, value_enum, default_value = "auto")]
         tier: TierArg,
+        /// What the test needs from a probe, for --tier auto (kernel, hardware; repeat or
+        /// separate with commas).
+        #[arg(long, value_enum, value_delimiter = ',')]
+        needs: Vec<NeedArg>,
         /// nspawn: boot systemd in the container and run the test as a unit.
         #[arg(long)]
         boot: bool,
@@ -83,8 +108,11 @@ pub enum BisectCmd {
         /// nspawn: each probe is a container you enter. metal: each probe is one reboot of
         /// this machine into the copy (hardware, firmware, GPU, Wi-Fi); the boot after it is
         /// your normal system again.
-        #[arg(long, value_enum, default_value = "nspawn")]
+        #[arg(long, value_enum, default_value = "auto")]
         tier: ManualTier,
+        /// What judging a probe needs, for --tier auto (kernel, hardware).
+        #[arg(long, value_enum, value_delimiter = ',')]
+        needs: Vec<NeedArg>,
         #[command(flatten)]
         reboot: RebootOpts,
     },
@@ -202,7 +230,22 @@ fn finding(status: &Status) {
             println!("first bad checkpoint: {first_bad} (last good {last_good})");
             println!("  {why}");
         }
-        Some(Finding::NotReproduced { detail }) => println!("not reproduced: {detail}"),
+        Some(Finding::NotReproduced { detail }) => {
+            println!("not reproduced: {detail}");
+            let (tier, manual) = (status.args.tier, status.args.manual);
+            match (tier.next(manual), manual) {
+                (Some(Tier::Vm), _) => {
+                    println!("next: the same with --tier vm (the probe's own kernel)");
+                }
+                (Some(Tier::Metal), _) => {
+                    println!("next: osreflog bisect start --tier metal (a reboot into each probe)");
+                }
+                (None, false) if tier == Tier::Vm => println!(
+                    "next: if it needs this machine's hardware, osreflog bisect start --tier metal (verdicts by hand)"
+                ),
+                _ => {}
+            }
+        }
         None => {}
     }
     if let Some(e) = &status.error {
@@ -396,6 +439,7 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
             good,
             bad,
             tier,
+            needs: needs_list,
             boot,
             timeout,
             script,
@@ -406,6 +450,9 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
                 good: crate::time::expand_ref(&good),
                 bad: crate::time::expand_ref(&bad),
                 tier: match tier {
+                    TierArg::Auto => {
+                        Tier::auto(&needs(&needs_list), false).map_err(anyhow::Error::msg)?
+                    }
                     TierArg::Nspawn => Tier::Nspawn,
                     TierArg::Vm => Tier::Vm,
                 },
@@ -478,12 +525,16 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
             good,
             bad,
             tier,
+            needs: needs_list,
             reboot,
         } => {
             let args = Args {
                 good: crate::time::expand_ref(&good),
                 bad: crate::time::expand_ref(&bad),
                 tier: match tier {
+                    ManualTier::Auto => {
+                        Tier::auto(&needs(&needs_list), true).map_err(anyhow::Error::msg)?
+                    }
                     ManualTier::Nspawn => Tier::Nspawn,
                     ManualTier::Metal => Tier::Metal,
                 },
