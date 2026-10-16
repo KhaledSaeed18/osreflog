@@ -77,6 +77,8 @@ pub struct DefaultRecord {
     /// BLAKE3 of `loader/entries/<saved_entry>.conf`.
     pub entry_blake3: String,
     /// The default entry's kernel and initramfs (relative to `/boot`), which must still exist.
+    /// GRUB variables among them (`$tuned_initrd`, which tuned adds to every Fedora entry, often
+    /// empty) aren't files and aren't listed.
     pub linux: String,
     pub initrd: Vec<String>,
 }
@@ -186,6 +188,7 @@ impl Boot {
         let initrd = entry
             .get_all("initrd")
             .into_iter()
+            .filter(|f| !f.starts_with('$'))
             .map(str::to_owned)
             .collect();
         Ok(DefaultRecord {
@@ -261,6 +264,17 @@ impl Boot {
         );
         entry.set("version", kernel.version());
         entry.set("linux", &linux);
+        // Variables on the default's initrd line (tuned's `$tuned_initrd`) stay: GRUB expands
+        // them for the probe as for the default.
+        let vars: Vec<&str> = entry
+            .get_all("initrd")
+            .into_iter()
+            .filter(|f| f.starts_with('$'))
+            .collect();
+        let initrd = std::iter::once(initrd.as_str())
+            .chain(vars)
+            .collect::<Vec<_>>()
+            .join(" ");
         entry.set("initrd", &initrd);
         entry.set("options", &bls::probe_options(&options, subvol, &extra));
         let target = self.probe_entry_path();

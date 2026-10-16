@@ -148,6 +148,13 @@ start() {
     echo "$good $bad" >"$STATE/checkpoints"
     osreflog bisect start --good "$good" --bad "$bad" --tier metal --no-reboot
     echo
+    # Only go on when a probe is armed and waits for its reboot.
+    local armed
+    armed=$(osreflog bisect status --json | python3 -I -c 'import json,sys; s=json.load(sys.stdin) or {}; w=s.get("waiting") or {}; print("yes" if s.get("running") and w.get("reboot") else (s.get("error") or "no probe armed"))')
+    if [ "$armed" != yes ]; then
+        echo "p7d: no probe is armed ($armed); nothing to reboot into. Clean up with: sudo $0 finish" >&2
+        exit 1
+    fi
     if [ "$hands_free" = --hands-free ]; then
         echo "hands-free: rebooting into the first probe in 20 s (Ctrl-C to stop; sudo $0 finish to clean up)"
         echo 1 >"$STATE/reboots"

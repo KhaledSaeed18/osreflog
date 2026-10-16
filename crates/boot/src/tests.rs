@@ -255,3 +255,41 @@ fn expand_is_grub_like() {
     assert_eq!(expand("cost=$ 5", &env), "cost=$ 5");
     assert_eq!(expand("plain", &env), "plain");
 }
+
+/// This laptop's real entries (P7d): tuned adds `$tuned_initrd` to `initrd` and `$tuned_params`
+/// to `options`. Neither is a file; the variables expand from grubenv (often to nothing).
+#[test]
+fn tuned_variables_in_a_fedora_entry() {
+    let Some(f) = fake("root=UUID=7b7a ro rootflags=subvol=root rhgb quiet $tuned_params") else {
+        return;
+    };
+    let b = &f.boot;
+    let p = b.entries_dir().join(format!("{ID}.conf"));
+    let text = std::fs::read_to_string(&p).unwrap().replace(
+        &format!("initrd /initramfs-{V}.img"),
+        &format!("initrd /initramfs-{V}.img $tuned_initrd"),
+    );
+    std::fs::write(&p, text).unwrap();
+    grubenv::edit(
+        &b.editenv,
+        &b.grubenv_path(),
+        &["set", "tuned_params=", "tuned_initrd="],
+    )
+    .unwrap();
+
+    let rec = b.default_record().unwrap();
+    assert_eq!(rec.initrd, vec![format!("/initramfs-{V}.img")]);
+    b.verify(&rec).unwrap();
+    let path = b
+        .write_probe_entry(&rec, 1, "osreflog/probes/p1", &reuse())
+        .unwrap();
+    let probe = bls::Entry::parse(&std::fs::read_to_string(path).unwrap());
+    assert_eq!(
+        probe.get("options"),
+        Some(
+            "root=UUID=7b7a ro rootflags=subvol=osreflog/probes/p1 rhgb quiet osreflog.probe=1 panic=10"
+        )
+    );
+    b.arm(&rec).unwrap();
+    b.verify(&rec).unwrap();
+}
