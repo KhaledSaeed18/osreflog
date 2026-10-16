@@ -11,3 +11,4 @@ One entry per phase, written while the phase runs and closed when its exit crite
 | P5 | [p5-undo.md](./p5-undo.md) | Closed 2026-10-15 |
 | P6 | [p6-bisect.md](./p6-bisect.md) | Closed 2026-10-15 |
 | P7 | [p7-metal.md](./p7-metal.md) | Boot gate passed 2026-10-16; P7 in progress |
+| P8 | [p8-app.md](./p8-app.md) | Pre-flight 2026-10-16 |
