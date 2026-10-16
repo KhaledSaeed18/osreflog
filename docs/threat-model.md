@@ -56,9 +56,11 @@ osreflogd is a root daemon that watches the system's config files, records every
 - Measured (P5): 100,000 processes and 300,000 file events from an ordinary user left osreflogd at 104 MB, its lineage table at its cap, the fanotify queue without overflow, and `status` answering in 19 ms.
 
 **Boot safety (metal bisect)**
-- One-shot entries only (`grub2-reboot`), the default entry never modified, and probe roots are clones.
-- The boot gate checklist must pass in a VM first ([roadmap](./roadmap.md)).
-- `osreflog doctor --boot` verifies that no probe entry is left behind and the default entry is intact.
+- One-shot entries only: `next_entry=osreflog-probe` set with `grub2-editenv` (not `grub2-reboot`, which can copy a stale `prev_saved_entry` into `saved_entry`); GRUB clears it as it starts the probe, so any later boot (a hang and a power cycle included) is the default. `panic=10` on the probe's cmdline reboots a crashed probe.
+- The default entry is never written: `saved_entry` and a BLAKE3 of its entry file are recorded before arming and checked after every step, at the next boot (the boot doctor) and from inside the probe. Arming is refused when the default isn't one fixed entry (no `saved_entry`, a `prev_saved_entry`, `/boot` inside the root filesystem).
+- Probe roots are clones, and so are their `/home`s; osreflogd doesn't run in a probe (two unit conditions), nothing of the ledger is mounted there, and the verdict comes back as a file in the clone. Every write into a clone goes through `openat2` beneath it with symlinks refused.
+- The only code that writes `/boot` is `osreflogd --boot-worker`, run as its own transient unit outside the daemon's sandbox, for one arm or disarm at a time; it puts `/boot` back on any failure. Starting a bisect, giving a verdict and rearming (each of which can arm a probe) need the `…bisect` polkit action (`auth_admin_keep`). Nothing reboots the machine without the person: the CLI asks, or `--yes`.
+- `osreflog-boot-doctor.service` runs at every boot of the default: it removes any probe entry, `/boot/osreflog/` and a probe `next_entry`, checks the default, and deletes probe clones no session waits for. `osreflog doctor --boot` runs it by hand. The boot gate passed in a Secure Boot test VM before any of this ran on hardware ([roadmap](./roadmap.md)); [recovery.md](./recovery.md) is the way back by hand.
 
 **Ledger integrity (A4)**
 - Hash chain: each committed cause stores `H(prev_hash ‖ cause_record)`. `osreflog verify` walks the chain and cross-checks against snapshots (a snapshot's send-stream diff must match the ledger's changes for that interval).

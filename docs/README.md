@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P7 (metal bisect) next; the boot gate passed 2026-10-16 ([journal](./journal/p7-metal.md)): in a Secure Boot test VM built from this machine, four probes in a row (one on its own older kernel, one that hangs, one that panics) all came back to the untouched default, and the boot doctor cleaned up after each. Last updated 2026-10-16.
+**Status:** P7 (metal bisect) in progress: the boot gate passed 2026-10-16 in a Secure Boot test VM; manual bisects (P7a) work on this machine with container probes, across a daemon restart; metal probes (P7b) and `--tier auto` (P7c) are built and wait for their run in the VM ([journal](./journal/p7-metal.md)). Last updated 2026-10-16.
 
 ## Reading order
 
