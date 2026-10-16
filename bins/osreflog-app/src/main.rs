@@ -340,6 +340,14 @@ fn build(app: &adw::Application) {
     window.present();
 }
 
+/// Empties the content page. Focus leaves it first: a clicked button removed while focused
+/// left GTK checking focus ancestry against a widget that was gone (`gtk_widget_is_ancestor:
+/// assertion 'GTK_IS_WIDGET (widget)' failed`).
+fn clear_detail(ui: &Ui) {
+    gtk::prelude::GtkWindowExt::set_focus(&ui.window, None::<&gtk::Widget>);
+    clear(&ui.detail);
+}
+
 fn clear(b: &gtk::Box) {
     while let Some(child) = b.first_child() {
         b.remove(&child);
@@ -535,7 +543,7 @@ fn file_row(title: &str, subtitle: &str, summary: &[String], expanded: bool) -> 
 }
 
 fn show_detail(ui: &Rc<Ui>, id: i64, r: Result<CauseDetail, Failure>) {
-    clear(&ui.detail);
+    clear_detail(ui);
     ui.split.set_show_content(true);
     let d = match r {
         Ok(d) => d,
@@ -617,7 +625,7 @@ fn until_row(ui: &Rc<Ui>, from: &str, to: &str, all: bool) -> adw::ComboRow {
 }
 
 fn show_diff(ui: &Rc<Ui>, from: &str, to: &str, all: bool, r: Result<Box<DiffReport>, Failure>) {
-    clear(&ui.detail);
+    clear_detail(ui);
     ui.content_page.set_title(&format!("Since {from}"));
     let r = match r {
         Ok(r) => r,
@@ -745,7 +753,7 @@ fn verdict_icon(verdict: &str) -> &'static str {
 }
 
 fn show_undo_plan(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Preview>, Failure>) {
-    clear(&ui.detail);
+    clear_detail(ui);
     ui.content_page.set_title(&format!("Undo #{id}"));
     let p = match r {
         Ok(p) => p,
@@ -865,7 +873,7 @@ fn confirm_undo(ui: &Rc<Ui>, id: i64, n: usize, digest: &str) {
 }
 
 fn show_undone(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Applied>, Failure>) {
-    clear(&ui.detail);
+    clear_detail(ui);
     let a = match r {
         Ok(a) => a,
         Err(f) => {

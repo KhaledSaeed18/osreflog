@@ -119,7 +119,7 @@ fn switch(title: &str, subtitle: &str) -> adw::SwitchRow {
 #[allow(clippy::too_many_lines)]
 pub fn show_form(ui: &Rc<Ui>) {
     *ui.selected.borrow_mut() = Some(Selected::BisectForm);
-    clear(&ui.detail);
+    crate::clear_detail(ui);
     ui.content_page.set_title("New bisect");
     ui.split.set_show_content(true);
     ui.detail
@@ -328,7 +328,7 @@ fn confirm_reset(ui: &Rc<Ui>, running: bool) {
 #[allow(clippy::too_many_lines)]
 fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
     *ui.shown_session.borrow_mut() = s.cloned();
-    clear(&ui.detail);
+    crate::clear_detail(ui);
     ui.split.set_show_content(true);
     let Some(s) = s else {
         ui.content_page.set_title("Bisect");
@@ -389,7 +389,10 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
                 _ => "This copy can't tell",
             }));
             let ui3 = Rc::clone(ui);
+            let row = buttons.clone();
             b.connect_clicked(move |_| {
+                // One verdict per probe: a second click could land on the next probe.
+                row.set_sensitive(false);
                 let _ = ui3
                     .requests
                     .try_send(Request::BisectVerdict(verdict.to_owned()));
