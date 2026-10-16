@@ -1,6 +1,6 @@
 # P8: GNOME app, packaging, hardening
 
-- Status: **P8a and P8b done**; P8c (undo with the dry-run preview) next
+- Status: **P8a, P8b and P8c done**; P8d (the bisect wizard) next
 - Started: 2026-10-16
 - Roadmap: [P8](../roadmap.md#p8-gnome-app-packaging-hardening)
 - Exit: installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
@@ -78,3 +78,10 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - **Found on the way:** libadwaita rows parsed a command's `&&` as markup ("Entity did not end with a semicolon"), whichever order the builder was given `use-markup` and the text. Rows are now made with setters in a fixed order (`set_use_markup(false)`, then the text): 0 warnings on a diff of 74 config files and on a cause whose command has `&&`, and the text shows as written.
 - `view.rs` gained the checkpoint rows, the diff facts, the package lines and the file groups: 5 tests.
 - **Seen against the real daemon**: c000134 → now: 74 config · 2 state · 11,966 package · 171 noise; "28/28 config changes, 9816/9816 overall have a recorded cause"; dnf #53; the two windows osreflogd wasn't watching today; 68 packages. GTK's Broadway backend drops clicks and scrolls, so the page was opened with `OSREFLOG_APP_OPEN=since:c000134` (a development hook, also `cause:<id>`). On the owner's desktop (Wayland, 2026-10-16) the checkpoint list, the Until choice, the switch and the cause buttons all work. **P8b done.**
+
+### 2026-10-16: P8c, undo from the app
+
+- `crates/client` has typed `undo_plan` and `undo`; the CLI's line diff moved to `osreflog_undo::textdiff`, so the app shows the same previews.
+- A cause's page has **Undo…**: the dry-run preview (`UndoPlan`; nothing written) lists each path with what undo would do (put back, with the text diff for a text file; remove to the attic; already as before; changed since, left alone; never undone), the paths undo never touches, and for a package transaction the `dnf5 history undo` command to run. **Undo N changes…** asks once more (a checkpoint first, every path checked again as it's written, replaced versions to the attic, the undo itself undoable), then sends `Undo(id, digest)`: exactly the plan shown, and polkit asks for an administrator's password. The result page shows the pre-undo checkpoint, the attic, each path's outcome, and opens the undo's own cause.
+- `view.rs`: the preview rows, the summary line ("Nothing has changed yet: 2 to put back, 1 changed since (left alone)", or "Nothing to put back: …"), the result rows: 6 tests.
+- **Checked:** the preview of #765 (`cupsd`) matched `osreflog undo 765` (two conflicts: cupsd rewrote both files since). Then, on the owner's desktop, a test change (#773 created `/etc/osreflog-p8c.conf` with `x = 1`, #774 `sed` made it `x = 2`) undone from the app: GNOME's polkit dialog asked for the password, the result page showed it put back, and from the CLI: the file holds `x = 1`, checkpoint c000136 "pre-undo, before undoing #774" was taken first, and the undo is cause #775 ("x: 2 → 1").
