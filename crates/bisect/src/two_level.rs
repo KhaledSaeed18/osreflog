@@ -211,10 +211,18 @@ impl TwoLevel {
     /// before it, so [`Self::next`] asks for that probe again. Returns what was taken back;
     /// `None` when there is no verdict yet. Works on a finished search too.
     pub fn take_back(&mut self) -> Option<(Step, Verdict)> {
+        // The cause count: kept since it was given, or read off any cause probe in the history
+        // (a session saved before the count was kept has only that).
+        let causes = self.causes.or_else(|| {
+            self.history.iter().find_map(|(step, _)| match step {
+                Step::AfterCauses { n, .. } => Some(*n),
+                _ => None,
+            })
+        });
         let last = self.history.pop()?;
         let mut m = TwoLevel::new(self.last);
         for (step, verdict) in &self.history {
-            if let (Step::Causes { .. }, Some(n)) = (m.next(), self.causes) {
+            if let (Step::Causes { .. }, Some(n)) = (m.next(), causes) {
                 m.causes(n);
             }
             debug_assert_eq!(
@@ -224,11 +232,11 @@ impl TwoLevel {
             );
             m.record(*verdict);
         }
-        if let (Step::Causes { .. }, Some(n)) = (m.next(), self.causes) {
+        if let (Step::Causes { .. }, Some(n)) = (m.next(), causes) {
             m.causes(n);
         }
         // The cause count stays known even if the replay stopped before asking for it.
-        m.causes = self.causes;
+        m.causes = causes;
         *self = m;
         Some(last)
     }
@@ -468,6 +476,41 @@ mod tests {
             }
         );
         assert!(m.take_back().is_none());
+    }
+
+    /// The P8d session on the laptop: saved before the cause count was kept, so its JSON has
+    /// no `causes`. Taking back probe 3 must ask after #780 again, not lose the good verdict for
+    /// #779 and ask that one.
+    #[test]
+    fn a_session_saved_without_the_cause_count_takes_back_right() {
+        let mut m = TwoLevel::new(1);
+        m.record(Verdict::Bad);
+        m.causes(3);
+        m.record(Verdict::Good); // after 1 of 3
+        m.record(Verdict::Bad); // after 2 of 3
+        assert_eq!(
+            m.next(),
+            Step::Done(Answer::Cause {
+                from: 0,
+                to: 1,
+                k: 2
+            })
+        );
+        let mut json: serde_json::Value = serde_json::to_value(&m).unwrap();
+        json.as_object_mut().unwrap().remove("causes");
+        let mut old: TwoLevel = serde_json::from_value(json).unwrap();
+        let (step, _) = old.take_back().unwrap();
+        assert_eq!(
+            step,
+            Step::AfterCauses {
+                from: 0,
+                to: 1,
+                k: 2,
+                n: 3
+            }
+        );
+        assert_eq!(old.next(), step);
+        assert_eq!(old.history.len(), 2, "the good verdict for #779 is kept");
     }
 
     #[test]
