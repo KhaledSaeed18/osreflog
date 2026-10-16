@@ -503,7 +503,8 @@ mod tests {
         assert!(me.exe.contains("osreflogd") || !me.exe.is_empty());
         let mut t = ProcTable::default();
         t.seed();
-        assert!(t.len() > 10);
+        // Only this process for sure: a build sandbox's PID namespace can hold a handful.
+        assert!(t.get(std::process::id()).is_some());
         assert_ne!(t.chain(std::process::id()).len(), 0);
     }
 }
