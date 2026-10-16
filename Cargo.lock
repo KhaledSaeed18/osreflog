@@ -1063,6 +1063,7 @@ dependencies = [
 name = "osreflog-client"
 version = "0.1.0"
 dependencies = [
+ "osreflog-bisect",
  "osreflog-model",
  "osreflog-undo",
  "serde",

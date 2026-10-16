@@ -151,6 +151,54 @@ impl Client {
         parse(&self.proxy.undo(id, digest).await.map_err(explain)?)
     }
 
+    /// The current or last bisect, if any.
+    ///
+    /// # Errors
+    /// If the call fails or its answer doesn't parse.
+    pub async fn bisect_status(&self) -> Result<Option<osreflog_bisect::Status>, ClientError> {
+        parse(&self.proxy.bisect_status().await.map_err(explain)?)
+    }
+
+    /// Starts a bisect: automatic (`bisect run`) or with verdicts by hand (`args.manual`).
+    /// polkit asks for an administrator's password, kept for a while.
+    ///
+    /// # Errors
+    /// If it is refused (one already runs, a bad range, no test) or the call fails.
+    pub async fn bisect_run(
+        &self,
+        args: &osreflog_bisect::Args,
+    ) -> Result<osreflog_bisect::Status, ClientError> {
+        let json = serde_json::to_string(args)?;
+        parse(&self.proxy.bisect_run(&json).await.map_err(explain)?)
+    }
+
+    /// The verdict (`good`, `bad` or `skip`) for the probe that waits for one.
+    ///
+    /// # Errors
+    /// If no probe waits, or the call fails.
+    pub async fn bisect_verdict(&self, verdict: &str) -> Result<(), ClientError> {
+        self.proxy.bisect_verdict(verdict).await.map_err(explain)?;
+        Ok(())
+    }
+
+    /// Arms the waiting metal probe again.
+    ///
+    /// # Errors
+    /// If no metal probe waits, or the call fails.
+    pub async fn bisect_rearm(&self) -> Result<(), ClientError> {
+        self.proxy.bisect_rearm().await.map_err(explain)?;
+        Ok(())
+    }
+
+    /// Forgets the last bisect; a manual one is stopped first (its probe and clones go).
+    ///
+    /// # Errors
+    /// If an automatic bisect still runs, or the call fails.
+    pub async fn bisect_reset(&self) -> Result<(), ClientError> {
+        self.proxy.bisect_reset().await.map_err(explain)?;
+        Ok(())
+    }
+
     /// # Errors
     /// If the call fails or its answer doesn't parse.
     pub async fn diff(&self, from: &str, to: &str, all: bool) -> Result<DiffReport, ClientError> {
