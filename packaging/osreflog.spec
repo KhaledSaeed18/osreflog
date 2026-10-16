@@ -108,8 +108,8 @@ cargo test --release --frozen --offline --workspace --exclude osreflog-fuzz
 %systemd_preun osreflogd.service osreflog-boot-doctor.service
 %systemd_user_preun osreflog-user.service
 
-# Upgrades restart the daemons once the whole transaction is done (systemd-update-helper), so
-# the dnf hook's post checkpoint goes to the new osreflogd.
+# Upgrades restart the daemons at the end of the rpm transaction (systemd-update-helper), not
+# halfway through it. Fresh installs leave the units to the presets: enabled by hand.
 %postun
 %systemd_postun_with_restart osreflogd.service
 %systemd_postun osreflog-boot-doctor.service
