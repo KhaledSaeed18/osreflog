@@ -406,10 +406,16 @@ impl Session<'_> {
         let Some(cur) = self.saved.current.take() else {
             return;
         };
-        let _ = block_on(stop_unit(&cur.unit));
+        let ms = u64::try_from(now_ms() - cur.since_ms).unwrap_or(0);
+        // A few seconds for `osreflog bisect …` inside the probe to say it was recorded, then
+        // the container shuts down; its clone can only go once it has.
+        std::thread::sleep(Duration::from_secs(3));
+        let _ = block_on(async {
+            stop_unit(&cur.unit).await?;
+            wait_gone(&cur.unit, Duration::from_secs(60)).await
+        });
         probe::delete_kept(self.engine, &cur.clone);
         let _ = std::fs::remove_file(self.engine.layout().probes().join(PENDING));
-        let ms = u64::try_from(now_ms() - cur.since_ms).unwrap_or(0);
         self.saved.status.waiting = None;
         self.log(format!(
             "  {} → {verdict:?} (by hand, after {})",

@@ -1,6 +1,6 @@
 # P7: The boot gate and metal bisect
 
-- Status: **boot gate passed 2026-10-16**; P7 proper (P7a–P7d) next
+- Status: **boot gate passed 2026-10-16; P7a done**; P7b–P7d next
 - Started: 2026-10-15
 - Roadmap: [BOOT GATE and P7](../roadmap.md#boot-gate-passed-2026-10-16)
 - Exit: the boot gate's checklist passes in a test VM; then one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
@@ -155,3 +155,24 @@ One thing for P7b: probe 4 has a boot record although it crashed, because the re
 All five items hold in the test VM ([roadmap](../roadmap.md#boot-gate-passed-2026-10-16)); [recovery.md](../recovery.md) says how to get back by hand. The test VM image stays in `osreflog/testvm` for P7a/P7b development (`sudo scripts/p7/testvm.sh delete` removes it).
 
 What hasn't run on this laptop yet: anything that writes to the real `/boot`. Before P7d's real bisect, `install-dev.sh` puts `osreflog-boot-doctor.service` in place, and the first metal probe on the laptop is armed by hand and watched.
+
+### 2026-10-16: P7a, verdicts by hand
+
+- **One search for both kinds of session.** `crates/bisect::two_level::TwoLevel` is the whole bisect (bad end, checkpoints, causes, the "after all causes" probe) as plain data: it names the next probe and takes its verdict. `bisect run` drives it with each probe's test; `bisect start` saves it between probes. Tested exhaustively: every culprit position for up to 12 checkpoints × 12 causes, with a JSON round trip between every step, found within 1 + ⌈log₂ checkpoints⌉ + ⌈log₂ causes⌉ + 1 probes.
+- **A manual session is saved in the ledger** (`meta` key `bisect.session`: the search, the checkpoint list, the interval's causes, the probes so far, the one waiting) after every step, and resumed when osreflogd starts. A waiting probe whose container is gone is booted again; one with a verdict already written is taken as answered.
+- **Probes for verdicts by hand, until metal (P7b):** a clone in `osreflog/probes/pN`, prepared as a container (`prepare_container`: empty fstab, osreflog and the dnf hook kept out, the marker), booted with `systemd-nspawn --boot --register=yes` in its own transient unit, so it outlives a restart of the daemon. A `pending.json` with no default record names it, and the boot doctor keeps it.
+- **The verdict is always a file in the probe** (`/var/lib/osreflog-probe/verdict`). Inside the probe, `sudo osreflog bisect good|bad|skip` sees the marker (`/var/lib/osreflog-probe/manual`) and writes it, with no daemon (osreflogd doesn't run in a probe); on the host, the same command goes over D-Bus (`BisectVerdict`) and the daemon writes it into the probe. The session's thread reads it within a second, stops the container, deletes the clone and builds the next probe. Metal probes will answer the same way, read after the reboot.
+- A booted container shares the host's kernel command line, so `ConditionKernelCommandLine=!osreflog.probe` alone would let osreflogd start inside one; the units (and the probe drop-ins) also carry `ConditionPathExists=!/var/lib/osreflog-probe/manual`.
+- CLI: `bisect start --good A [--bad B]` (follows the log to the first waiting probe and says how to look into it), `good | bad | skip` (on the host: follows to the next probe or the result), `log` (every probe and its verdict), `status` shows the waiting probe, `reset` stops a manual session (container, clone, saved state).
+
+`scripts/p7/manual.sh` on this machine (this build installed): four real causes, the third adding a bad line; `bisect start`; the script plays the person, checking each container (`systemd-run -M osreflog-probe-N … grep`) and giving the verdict alternately inside the container and on the host; osreflogd restarted while probe 2 waited.
+
+| | |
+| - | - |
+| Result | **#594 found** (the bad line), 3 probes: the bad end, after 2 of 4 causes (good), after 3 of 4 (bad) |
+| Restart | after `systemctl restart osreflogd` probe 2 still waited and the session went on |
+| Verdicts | inside the container (probes 1, 3) and on the host (probe 2), each picked up within a second |
+| Time | 20 s for the whole bisect, containers booting multi-user in a few seconds each |
+| Left over | no probe container |
+
+Found: the daemon stopped the container within a second of a verdict written inside it, so `systemd-run -M` lost its connection ("Connection reset by peer") before the CLI's "recorded" message showed. The verdict counted, but a person would see the session close under them. The daemon now waits 3 s before stopping the container, and waits for it to be gone before deleting the clone (the delete could race the shutdown and leave the clone to the boot doctor). Not re-run since this change.

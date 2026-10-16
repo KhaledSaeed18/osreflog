@@ -100,9 +100,10 @@ Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
 - [x] A recovery note in the docs: how to boot the default entry by hand from the GRUB menu ([recovery.md](./recovery.md))
 
 ## P7: Metal bisect
-- Probe kernel/initramfs preparation, temporary BLS entry, `grub2-reboot` one-shot
-- Probe-side oneshot unit and verdict prompt; resume the bisect after reboot
-- `--tier auto` with capability hints (`--needs kernel|hardware`)
+- [x] Probe kernel/initramfs preparation, temporary BLS entry, ~~`grub2-reboot`~~ `grub2-editenv set next_entry` one-shot (boot gate, G2)
+- [x] Probe-side oneshot unit and verdict prompt (G3); manual verdicts (`bisect start / good / bad / skip / log`), the session saved in the ledger and resumed (P7a, with container probes)
+- [ ] `--tier metal`: arm, reboot, verdict in the probe, reboot, continue (P7b)
+- [ ] `--tier auto` with capability hints (`--needs kernel|hardware`)
 
 **Exit:** one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end.
 

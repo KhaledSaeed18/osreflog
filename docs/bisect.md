@@ -4,8 +4,8 @@
 
 ```
 osreflog bisect run --good @{boot-3} --bad @{now} [--tier nspawn|vm|metal] -- <test command>
-osreflog bisect start --good c40 --bad c47 --tier metal      # manual verdicts
-osreflog bisect good | bad | skip
+osreflog bisect start --good c40 --bad c47 [--tier metal]    # manual verdicts (P7a: containers)
+osreflog bisect good | bad | skip                            # on the host, or as root inside the probe
 osreflog bisect log | reset
 ```
 
