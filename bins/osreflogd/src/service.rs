@@ -326,6 +326,19 @@ impl Service {
         serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
     }
 
+    /// Arms the waiting metal probe again (it didn't boot, or came back without a verdict);
+    /// returns the `Status` as it was.
+    async fn bisect_rearm(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] c: &zbus::Connection,
+    ) -> Result<String, Error> {
+        let uid = self.authorize(&header, c, Need::Bisect).await?;
+        tracing::info!(uid, "bisect rearm");
+        let status = crate::bisect::rearm(&self.bisect)?;
+        serde_json::to_string(&status).map_err(|e| Error::Failed(e.to_string()))
+    }
+
     /// Forgets the last bisect. A manual one is stopped (its container and clone removed); an
     /// automatic one that still runs is refused.
     async fn bisect_reset(

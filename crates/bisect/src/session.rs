@@ -45,6 +45,9 @@ pub struct Waiting {
     pub since_ms: i64,
     /// How to look at it, and how to answer.
     pub how: Vec<String>,
+    /// A metal probe: armed for the next boot, waiting for a reboot into it.
+    #[serde(default)]
+    pub reboot: bool,
 }
 
 /// One probe and what it said.

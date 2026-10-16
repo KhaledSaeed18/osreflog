@@ -140,6 +140,23 @@ pub fn clone_checkpoint<'a>(
     })
 }
 
+/// A writable snapshot of the subvolume `from` (a path from the btrfs top level, such as
+/// `home`) kept as `name` in `osreflog/probes/`: a metal probe's throwaway home.
+///
+/// # Errors
+/// If the subvolume can't be opened or snapshotted.
+pub fn snapshot_kept(engine: &Engine, from: &str, name: &str) -> io::Result<()> {
+    let from = from.trim_start_matches('/');
+    if from.is_empty() || from.split('/').any(|c| c == ".." || c.is_empty()) {
+        return Err(io::Error::other(format!("not a subvolume path: {from}")));
+    }
+    let layout = engine.layout();
+    let src = File::open(layout.top.join(from))?;
+    let dir = File::open(layout.probes())?;
+    let _ = ioctl::delete_subvolume(dir.as_fd(), name);
+    ioctl::create_snapshot(src.as_fd(), dir.as_fd(), name, false)
+}
+
 /// The path of a kept probe.
 #[must_use]
 pub fn kept_path(engine: &Engine, name: &str) -> PathBuf {

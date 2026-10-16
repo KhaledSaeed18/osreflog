@@ -57,6 +57,8 @@ pub struct Inner {
     status: Mutex<Option<Status>>,
     /// Set by `bisect reset` to make a manual session's thread clean up and stop.
     cancel: AtomicBool,
+    /// Set by `bisect rearm`: arm the waiting metal probe again.
+    rearm: AtomicBool,
 }
 
 pub type Shared = Arc<Inner>;
@@ -82,6 +84,23 @@ struct Current {
     what: String,
     approximate: Vec<String>,
     since_ms: i64,
+    /// A metal probe: its throwaway home's clone, the boot it was armed in (a reboot since
+    /// means the probe had its chance), and the kernel it boots.
+    #[serde(default)]
+    metal: bool,
+    #[serde(default)]
+    home: Option<String>,
+    #[serde(default)]
+    armed_boot: String,
+    #[serde(default)]
+    kernel: String,
+}
+
+/// This boot's id: a metal probe armed in it hasn't been booted yet.
+fn boot_id() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
 }
 
 /// Everything a session is, saved between steps (manual) or kept in memory (automatic).
@@ -342,6 +361,9 @@ impl Session<'_> {
         approximate: Vec<String>,
     ) -> Result<()> {
         let fail = |e: &dyn std::fmt::Display| invalid(format!("preparing probe {n}: {e}"));
+        if self.saved.status.args.tier == Tier::Metal {
+            return self.arm_metal(n, clone, path, what, approximate);
+        }
         osreflog_boot::probe::prepare_container(path, n).map_err(|e| fail(&e))?;
         // The boot doctor keeps a clone only while pending.json names it.
         let pending = Pending {
@@ -363,6 +385,10 @@ impl Session<'_> {
             what,
             approximate,
             since_ms: now_ms(),
+            metal: false,
+            home: None,
+            armed_boot: String::new(),
+            kernel: String::new(),
         };
         self.start_container(&cur, top_relative)?;
         self.saved.status.waiting = Some(Waiting {
@@ -373,6 +399,7 @@ impl Session<'_> {
                 format!("look into it:  sudo machinectl shell {}", cur.machine),
                 "then, in there or here:  sudo osreflog bisect good | bad | skip".into(),
             ],
+            reboot: false,
         });
         let line = format!(
             "probe {n}: {} is booting as container {}",
@@ -381,6 +408,180 @@ impl Session<'_> {
         self.saved.current = Some(cur);
         self.log(line);
         Ok(())
+    }
+
+    /// A metal probe: a throwaway home snapshot, the clone prepared to boot on its own root,
+    /// then the boot worker records the default, puts the kernel and the entry on `/boot` and
+    /// arms it for the next boot only. Nothing reboots here: the person does.
+    fn arm_metal(
+        &mut self,
+        n: u32,
+        clone: String,
+        path: &std::path::Path,
+        what: String,
+        approximate: Vec<String>,
+    ) -> Result<()> {
+        let fail = |e: &dyn std::fmt::Display| invalid(format!("preparing probe {n}: {e}"));
+        let fstab = std::fs::read_to_string(path.join("etc/fstab")).unwrap_or_default();
+        let home =
+            match osreflog_boot::probe::home_of(&osreflog_boot::probe::original_fstab(&fstab)) {
+                osreflog_boot::probe::Home::Throwaway { from } => {
+                    let name = format!("{clone}-home");
+                    probe::snapshot_kept(self.engine, &from, &name)
+                        .map_err(|e| fail(&format!("snapshotting {from}: {e}")))?;
+                    Some(name)
+                }
+                osreflog_boot::probe::Home::InRoot => None,
+                osreflog_boot::probe::Home::Real { spec } => {
+                    self.log(format!(
+                    "  note: /home is {spec}, another filesystem: probe {n} mounts your real /home"
+                ));
+                    None
+                }
+            };
+        let prep = osreflog_boot::probe::Prep {
+            n,
+            root_subvol: format!("osreflog/probes/{clone}"),
+            home_subvol: home.as_ref().map(|h| format!("osreflog/probes/{h}")),
+        };
+        let cleanup = |s: &Self| {
+            probe::delete_kept(s.engine, &clone);
+            if let Some(h) = &home {
+                probe::delete_kept(s.engine, h);
+            }
+        };
+        if let Err(e) = osreflog_boot::probe::prepare(path, &prep) {
+            cleanup(self);
+            return Err(fail(&e));
+        }
+        let armed = match boot_job(&crate::bootworker::Job::Arm {
+            device: self.engine.layout().device.clone(),
+            n,
+            clone: clone.clone(),
+            home: home.clone(),
+        }) {
+            Ok(()) => read_armed(path),
+            Err(e) => Err(e.to_string()),
+        };
+        let armed = match armed {
+            Ok(a) => a,
+            Err(e) => {
+                cleanup(self);
+                return Err(invalid(format!("arming probe {n}: {e}")));
+            }
+        };
+        let cur = Current {
+            n,
+            clone,
+            unit: String::new(),
+            machine: String::new(),
+            what,
+            approximate,
+            since_ms: now_ms(),
+            metal: true,
+            home,
+            armed_boot: boot_id(),
+            kernel: armed.kernel.clone(),
+        };
+        self.saved.status.waiting = Some(metal_waiting(&cur));
+        let line = format!(
+            "probe {n}: {} is armed for the next boot (kernel {}{}, in {})",
+            cur.what,
+            armed.kernel,
+            if armed.installed {
+                ", copied to /boot/osreflog"
+            } else {
+                ""
+            },
+            secs(armed.ms)
+        );
+        self.saved.current = Some(cur);
+        self.log(line);
+        Ok(())
+    }
+
+    /// Takes `/boot` back from a metal probe if anything of it is still there.
+    fn disarm_if_needed(&self) {
+        let left = osreflog_boot::Boot::new("/boot")
+            .leftovers()
+            .unwrap_or_default();
+        if left != osreflog_boot::Leftovers::default() {
+            let job = crate::bootworker::Job::Disarm {
+                device: self.engine.layout().device.clone(),
+            };
+            if let Err(e) = boot_job(&job) {
+                tracing::error!("disarming /boot: {e}");
+            }
+        }
+    }
+
+    /// `bisect rearm`: the waiting metal probe armed again (it didn't boot, or came back
+    /// without a verdict).
+    fn rearm(&mut self) {
+        let Some(mut cur) = self.saved.current.clone().filter(|c| c.metal) else {
+            self.log("rearm: no metal probe waits");
+            return;
+        };
+        let path = probe::kept_path(self.engine, &cur.clone);
+        if let Ok(b) = osreflog_undo::beneath::Beneath::open(&path) {
+            let _ = b.remove(&format!("{}/booted", osreflog_boot::probe::PROBE_DIR));
+        }
+        let job = crate::bootworker::Job::Arm {
+            device: self.engine.layout().device.clone(),
+            n: cur.n,
+            clone: cur.clone.clone(),
+            home: cur.home.clone(),
+        };
+        match boot_job(&job)
+            .map_err(|e| e.to_string())
+            .and_then(|()| read_armed(&path))
+        {
+            Ok(a) => {
+                cur.armed_boot = boot_id();
+                cur.kernel = a.kernel;
+                self.saved.status.waiting = Some(metal_waiting(&cur));
+                let line = format!("probe {} is armed again for the next boot", cur.n);
+                self.saved.current = Some(cur);
+                self.log(line);
+            }
+            Err(e) => self.log(format!("rearming probe {}: {e}", cur.n)),
+        }
+    }
+
+    /// After a reboot back to the default: what became of the armed metal probe.
+    fn came_back(&mut self) {
+        let Some(cur) = self.saved.current.clone().filter(|c| c.metal) else {
+            return;
+        };
+        if cur.armed_boot == boot_id() {
+            return; // the daemon restarted; the machine hasn't rebooted yet
+        }
+        let path = probe::kept_path(self.engine, &cur.clone);
+        if osreflog_boot::probe::read_verdict(&path).is_some() {
+            return; // the loop takes it
+        }
+        let line = match osreflog_boot::probe::booted(&path, cur.n) {
+            Some(b) => format!(
+                "probe {} booted (kernel {}) but came back without a verdict: give it here, sudo osreflog bisect good | bad | skip, or boot it again: sudo osreflog bisect rearm",
+                cur.n, b.kernel
+            ),
+            None => format!(
+                "probe {} didn't boot (this boot is the default): sudo osreflog bisect rearm to try again, or skip it: sudo osreflog bisect skip",
+                cur.n
+            ),
+        };
+        if let Some(w) = self.saved.status.waiting.as_mut() {
+            w.reboot = false;
+            w.how = vec![
+                "give the verdict here:  sudo osreflog bisect good | bad | skip".into(),
+                "or boot it again:  sudo osreflog bisect rearm  (then reboot)".into(),
+            ];
+        }
+        // Mark it seen, so another restart in this boot doesn't say it again.
+        if let Some(c) = self.saved.current.as_mut() {
+            c.armed_boot = boot_id();
+        }
+        self.log(line);
     }
 
     fn start_container(&self, cur: &Current, top_relative: String) -> Result<()> {
@@ -396,8 +597,15 @@ impl Session<'_> {
         };
         let exe = std::env::current_exe().map_err(|e| invalid(format!("the runner: {e}")))?;
         let spec_json = serde_json::to_string(&spec).map_err(|e| invalid(e.to_string()))?;
-        block_on(start_unit(&cur.unit, exe, &spec_json, 1024, MANUAL_MAX_S))
-            .map_err(|e| invalid(format!("starting {}: {e}", cur.unit)))
+        block_on(start_unit(
+            &cur.unit,
+            exe,
+            FLAG,
+            &spec_json,
+            1024,
+            MANUAL_MAX_S,
+        ))
+        .map_err(|e| invalid(format!("starting {}: {e}", cur.unit)))
     }
 
     /// The verdict for the waiting probe: the container stopped, the clone deleted, the
@@ -407,14 +615,7 @@ impl Session<'_> {
             return;
         };
         let ms = u64::try_from(now_ms() - cur.since_ms).unwrap_or(0);
-        // A few seconds for `osreflog bisect …` inside the probe to say it was recorded, then
-        // the container shuts down; its clone can only go once it has.
-        std::thread::sleep(Duration::from_secs(3));
-        let _ = block_on(async {
-            stop_unit(&cur.unit).await?;
-            wait_gone(&cur.unit, Duration::from_secs(60)).await
-        });
-        probe::delete_kept(self.engine, &cur.clone);
+        self.release(&cur);
         let _ = std::fs::remove_file(self.engine.layout().probes().join(PENDING));
         self.saved.status.waiting = None;
         self.log(format!(
@@ -431,6 +632,28 @@ impl Session<'_> {
             detail: String::new(),
             output: String::new(),
         });
+    }
+
+    /// Everything the probe `cur` holds goes: its container or its arming of `/boot`, its
+    /// clones, `pending.json`.
+    fn release(&self, cur: &Current) {
+        if cur.metal {
+            // A verdict given before the reboot, or a reset: /boot may still be armed.
+            self.disarm_if_needed();
+            if let Some(h) = &cur.home {
+                probe::delete_kept(self.engine, h);
+            }
+        } else {
+            // A few seconds for `osreflog bisect …` inside the probe to say it was recorded,
+            // then the container shuts down; its clone can only go once it has.
+            std::thread::sleep(Duration::from_secs(3));
+            let _ = block_on(async {
+                stop_unit(&cur.unit).await?;
+                wait_gone(&cur.unit, Duration::from_secs(60)).await
+            });
+        }
+        probe::delete_kept(self.engine, &cur.clone);
+        let _ = std::fs::remove_file(self.engine.layout().probes().join(PENDING));
     }
 
     /// Ends the session with what the search found.
@@ -565,7 +788,7 @@ impl Session<'_> {
         let _ = std::fs::remove_file(&result_file);
         let deadline = Duration::from_secs(timeout_s + 600);
         let ran = block_on(async {
-            start_unit(&unit, exe, &spec_json, mem_mib, timeout_s + 600).await?;
+            start_unit(&unit, exe, FLAG, &spec_json, mem_mib, timeout_s + 600).await?;
             wait_gone(&unit, deadline).await
         });
         if let Err(e) = ran {
@@ -646,6 +869,52 @@ impl Session<'_> {
     }
 }
 
+/// Runs the boot worker for `job` in its own transient unit and waits for it.
+fn boot_job(job: &crate::bootworker::Job) -> Result<()> {
+    let exe = std::env::current_exe().map_err(|e| invalid(format!("the boot worker: {e}")))?;
+    let json = serde_json::to_string(job).map_err(|e| invalid(e.to_string()))?;
+    let unit = format!(
+        "osreflog-boot-worker-{}-{}.service",
+        std::process::id(),
+        now_ms()
+    );
+    block_on(async {
+        start_unit(&unit, exe, crate::bootworker::FLAG, &json, 1024, 900).await?;
+        wait_gone(&unit, Duration::from_secs(960)).await
+    })
+    .map_err(|e| invalid(format!("the boot worker ({unit}): {e}")))
+}
+
+fn metal_waiting(cur: &Current) -> Waiting {
+    Waiting {
+        probe: cur.n,
+        what: cur.what.clone(),
+        since_ms: cur.since_ms,
+        how: vec![
+            format!(
+                "reboot into it:  systemctl reboot  (the next boot only, kernel {}; the one after is your normal system)",
+                cur.kernel
+            ),
+            "in the probe: check, then  sudo osreflog bisect good | bad | skip  and reboot".into(),
+            "or answer here without rebooting:  sudo osreflog bisect good | bad | skip".into(),
+        ],
+        reboot: true,
+    }
+}
+
+/// The boot worker's result for an arm, from the clone.
+fn read_armed(clone: &std::path::Path) -> std::result::Result<crate::bootworker::Armed, String> {
+    let text = osreflog_undo::beneath::Beneath::open(clone)
+        .and_then(|b| b.read(crate::bootworker::ARM_RESULT))
+        .map_err(|e| format!("no result from the boot worker: {e}"))?;
+    let a: crate::bootworker::Armed =
+        serde_json::from_str(&text).map_err(|e| format!("the boot worker's result: {e}"))?;
+    match a.error {
+        Some(e) => Err(e),
+        None => Ok(a),
+    }
+}
+
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
     match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -678,7 +947,8 @@ fn manager(
 async fn start_unit(
     unit: &str,
     exe: std::path::PathBuf,
-    spec_json: &str,
+    flag: &str,
+    arg: &str,
     mem_mib: u64,
     max_s: u64,
 ) -> zbus::Result<()> {
@@ -687,7 +957,7 @@ async fn start_unit(
     let exe = exe.to_string_lossy().into_owned();
     let exec: Vec<(String, Vec<String>, bool)> = vec![(
         exe.clone(),
-        vec![exe, FLAG.to_owned(), spec_json.to_owned()],
+        vec![exe, flag.to_owned(), arg.to_owned()],
         false,
     )];
     let props: Vec<(&str, Value<'_>)> = vec![
@@ -780,9 +1050,14 @@ pub fn start(engine: Arc<Engine>, shared: &Shared, args: Args) -> Result<Status>
         if !args.manual && args.test.trim().is_empty() {
             return Err(invalid("no test given"));
         }
-        if args.manual && args.tier != Tier::Nspawn {
+        if args.manual && args.tier == Tier::Vm {
             return Err(invalid(
-                "verdicts by hand need --tier nspawn (a container you enter) or, from P7b, --tier metal",
+                "verdicts by hand need --tier nspawn (a container you enter) or --tier metal (a reboot)",
+            ));
+        }
+        if !args.manual && args.tier == Tier::Metal {
+            return Err(invalid(
+                "a metal probe needs a person to judge it: osreflog bisect start --tier metal",
             ));
         }
         *s = Some(new_status(args.clone()));
@@ -845,6 +1120,8 @@ fn spawn(engine: Arc<Engine>, shared: &Shared, saved: Saved, fresh: bool) -> Res
                     session.fail(&e);
                     return;
                 }
+            } else if session.saved.current.as_ref().is_some_and(|c| c.metal) {
+                session.came_back();
             } else if let Some(cur) = session.saved.current.clone() {
                 // After a restart or a reboot: boot the waiting probe again unless its verdict
                 // is already there or its container still runs.
@@ -883,9 +1160,7 @@ fn manual_loop(session: &mut Session<'_>) {
     loop {
         if session.shared.cancel.load(Ordering::Relaxed) {
             if let Some(cur) = session.saved.current.take() {
-                let _ = block_on(stop_unit(&cur.unit));
-                probe::delete_kept(session.engine, &cur.clone);
-                let _ = std::fs::remove_file(session.engine.layout().probes().join(PENDING));
+                session.release(&cur);
             }
             let _ = session.engine.ledger().set_meta(SAVED_KEY, "");
             *lock(&session.shared) = None;
@@ -905,6 +1180,10 @@ fn manual_loop(session: &mut Session<'_>) {
             stopped_said = false;
             continue;
         };
+        if session.shared.rearm.swap(false, Ordering::Relaxed) {
+            session.rearm();
+            continue;
+        }
         let path = probe::kept_path(session.engine, &cur.clone);
         if let Some(v) = osreflog_boot::probe::read_verdict(&path) {
             let verdict = match v.as_str() {
@@ -915,7 +1194,7 @@ fn manual_loop(session: &mut Session<'_>) {
             session.give(verdict);
             continue;
         }
-        if !stopped_said && !block_on(unit_active(&cur.unit)).unwrap_or(true) {
+        if !cur.metal && !stopped_said && !block_on(unit_active(&cur.unit)).unwrap_or(true) {
             stopped_said = true;
             session.log(format!(
                 "probe {}'s container stopped without a verdict: give it here, sudo osreflog bisect good | bad | skip",
@@ -945,6 +1224,21 @@ pub fn verdict(engine: &Engine, shared: &Shared, verdict: &str) -> Result<Status
     let path = probe::kept_path(engine, &format!("p{}", w.probe));
     osreflog_boot::probe::write_verdict(&path, verdict)
         .map_err(|e| invalid(format!("recording the verdict: {e}")))?;
+    Ok(s)
+}
+
+/// `bisect rearm`: arms the waiting metal probe again, in the session's thread.
+///
+/// # Errors
+/// If no metal probe waits.
+pub fn rearm(shared: &Shared) -> Result<Status> {
+    let Some(s) = status(shared) else {
+        return Err(invalid("no bisect: osreflog bisect start --tier metal"));
+    };
+    if s.args.tier != Tier::Metal || s.waiting.is_none() {
+        return Err(invalid("no metal probe waits for a verdict"));
+    }
+    shared.rearm.store(true, Ordering::Relaxed);
     Ok(s)
 }
 
