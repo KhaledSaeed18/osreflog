@@ -1,6 +1,6 @@
 # P8: GNOME app, packaging, hardening
 
-- Status: **P8a done; P8b built** (needs a click-through on the real desktop)
+- Status: **P8a and P8b done**; P8c (undo with the dry-run preview) next
 - Started: 2026-10-16
 - Roadmap: [P8](../roadmap.md#p8-gnome-app-packaging-hardening)
 - Exit: installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
@@ -77,4 +77,4 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - A reply for anything but the current selection is dropped, so a slow diff can't overwrite a cause picked meanwhile.
 - **Found on the way:** libadwaita rows parsed a command's `&&` as markup ("Entity did not end with a semicolon"), whichever order the builder was given `use-markup` and the text. Rows are now made with setters in a fixed order (`set_use_markup(false)`, then the text): 0 warnings on a diff of 74 config files and on a cause whose command has `&&`, and the text shows as written.
 - `view.rs` gained the checkpoint rows, the diff facts, the package lines and the file groups: 5 tests.
-- **Seen against the real daemon**: c000134 → now: 74 config · 2 state · 11,966 package · 171 noise; "28/28 config changes, 9816/9816 overall have a recorded cause"; dnf #53; the two windows osreflogd wasn't watching today; 68 packages. GTK's Broadway backend drops clicks and scrolls, so the page was opened with `OSREFLOG_APP_OPEN=since:c000134` (a development hook, also `cause:<id>`). Still to see on the real desktop: the Until choice, the switch, the cause buttons, scrolling a long diff.
+- **Seen against the real daemon**: c000134 → now: 74 config · 2 state · 11,966 package · 171 noise; "28/28 config changes, 9816/9816 overall have a recorded cause"; dnf #53; the two windows osreflogd wasn't watching today; 68 packages. GTK's Broadway backend drops clicks and scrolls, so the page was opened with `OSREFLOG_APP_OPEN=since:c000134` (a development hook, also `cause:<id>`). On the owner's desktop (Wayland, 2026-10-16) the checkpoint list, the Until choice, the switch and the cause buttons all work. **P8b done.**
