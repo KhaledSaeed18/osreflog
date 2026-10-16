@@ -14,6 +14,7 @@ osreflog-fanotify.workspace = true
 osreflog-ledger.workspace = true
 osreflog-rpm.workspace = true
 osreflog-semantic = { path = "../crates/semantic" }
+osreflog-undo.workspace = true
 fastrand = "2"
 rustix = { workspace = true, features = ["time"] }
 serde_json.workspace = true

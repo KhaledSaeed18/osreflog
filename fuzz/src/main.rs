@@ -15,8 +15,7 @@
 //! reproduced by rerunning with the logged seed; large inputs are also written to
 //! `<out>/<target>.current` before they run.
 
-#[path = "../../bins/osreflog/src/textdiff.rs"]
-mod textdiff;
+use osreflog_undo::textdiff;
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;

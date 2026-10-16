@@ -1090,6 +1090,7 @@ dependencies = [
  "osreflog-ledger",
  "osreflog-rpm",
  "osreflog-semantic",
+ "osreflog-undo",
  "rustix",
  "serde_json",
 ]
