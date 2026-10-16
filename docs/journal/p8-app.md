@@ -1,6 +1,6 @@
 # P8: GNOME app, packaging, hardening
 
-- Status: **P8a, P8b and P8c done**; P8d (the bisect wizard) next
+- Status: **P8a–P8d done**; P8e (packaging) next
 - Started: 2026-10-16
 - Roadmap: [P8](../roadmap.md#p8-gnome-app-packaging-hardening)
 - Exit: installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
@@ -85,3 +85,15 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - A cause's page has **Undo…**: the dry-run preview (`UndoPlan`; nothing written) lists each path with what undo would do (put back, with the text diff for a text file; remove to the attic; already as before; changed since, left alone; never undone), the paths undo never touches, and for a package transaction the `dnf5 history undo` command to run. **Undo N changes…** asks once more (a checkpoint first, every path checked again as it's written, replaced versions to the attic, the undo itself undoable), then sends `Undo(id, digest)`: exactly the plan shown, and polkit asks for an administrator's password. The result page shows the pre-undo checkpoint, the attic, each path's outcome, and opens the undo's own cause.
 - `view.rs`: the preview rows, the summary line ("Nothing has changed yet: 2 to put back, 1 changed since (left alone)", or "Nothing to put back: …"), the result rows: 6 tests.
 - **Checked:** the preview of #765 (`cupsd`) matched `osreflog undo 765` (two conflicts: cupsd rewrote both files since). Then, on the owner's desktop, a test change (#773 created `/etc/osreflog-p8c.conf` with `x = 1`, #774 `sed` made it `x = 2`) undone from the app: GNOME's polkit dialog asked for the password, the result page showed it put back, and from the CLI: the file holds `x = 1`, checkpoint c000136 "pre-undo, before undoing #774" was taken first, and the undo is cause #775 ("x: 2 → 1").
+
+### 2026-10-16: P8d, the bisect wizard
+
+- `crates/client`: typed `bisect_run`, `bisect_status`, `bisect_verdict`, `bisect_rearm`, `bisect_reset`.
+- The sidebar has a third view, **Bisect**: the current or last session (its range, tier and state) and **New bisect…**. The **form**: good and bad checkpoints, who decides (a test, or the person), how copies run (whatever the test needs, containers, VMs with their own kernel, reboots of this machine), what the test needs (the kernel, this machine's hardware), booting systemd in the container, and the test command with the exit-code contract. `view::bisect_args` turns it into the daemon's `Args` and refuses what can't work (a metal probe judged by a test, a VM judged by hand, no test, the same checkpoint twice).
+- The **session page** follows the session every second while it runs: the probe that waits with its how-to lines and **Good / Bad / Skip** (one click per probe: the buttons go insensitive at the first), **Reboot now…** for an armed metal probe (asks first, then `systemctl reboot`), **Arm it again** for one that came back without a verdict; what was found, with **Open #id**; every probe with its verdict, time, qemu memory, approximations and output; the log; **Stop this bisect…** / **Forget it**. A refused action (polkit, a busy session) is said in a dialog.
+- `view.rs`: the form's rules, the session's title, state, probe rows and finding: 8 tests in all.
+- **On the owner's desktop**, with a seeded regression (c000137 "p8d: good" … c000138 "p8d: bad"; #779 `# tuned`, **#780 `mode = broken`**, #781 `timeout = 30`):
+  - **automatic** from the app (test `! grep -q 'mode = broken' …`): bad end bad, after #779 good, after #780 bad: **#780**, probes of 0.3–0.4 s;
+  - **by hand** from the app (containers): the first attempt took a mistaken **Bad** on probe 2 and ended, as it must, on #779; run again with the right verdicts: bad, good, bad: **#780** in 3 probes.
+- Fixed on the way: `Gtk-CRITICAL gtk_widget_is_ancestor` on every page rebuild (a clicked button removed while focused: focus now leaves the page first); a double click giving two verdicts (once harmless, but a slower one could land on the next probe); the "good" icon (`emblem-ok-symbolic` isn't in Adwaita: `object-select-symbolic`); "Checkpoints" cut off in the switcher (narrow policy, sidebar at least 380 px).
+- **A gap the mistaken verdict showed:** a verdict can't be taken back. `git bisect` replays its log for that; here the session keeps every verdict, so the search can be rebuilt without the last one.

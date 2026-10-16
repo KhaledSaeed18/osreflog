@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P8 (GNOME app, packaging, hardening) in progress: P8a (the history browser), P8b ("what changed since…") and P8c (undo with the preview) done.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed and P7 closed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P8 (GNOME app, packaging, hardening) in progress: P8a (the history browser), P8b ("what changed since…"), P8c (undo with the preview) and P8d (the bisect wizard) done.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed and P7 closed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
