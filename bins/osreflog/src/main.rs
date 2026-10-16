@@ -36,6 +36,7 @@ pub(crate) trait Osreflog {
     fn bisect_run(&self, args: &str) -> zbus::Result<String>;
     fn bisect_status(&self) -> zbus::Result<String>;
     fn bisect_reset(&self) -> zbus::Result<String>;
+    fn bisect_verdict(&self, verdict: &str) -> zbus::Result<String>;
 }
 
 /// How long the dnf hook waits for the daemon before giving up (and letting dnf continue).
@@ -375,6 +376,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             dry_run,
         } => doctor::boot(dry_run),
         Cmd::Doctor { .. } => doctor::run(cli.session_bus).await,
+        // Inside a bisect probe osreflogd doesn't run: the verdict is a file there.
+        Cmd::Bisect { action } if bisect::in_probe(&action) => bisect::verdict_here(&action),
         Cmd::User { key, limit, json } => user(key.as_deref(), limit, json),
         Cmd::Undo {
             id,
