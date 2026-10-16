@@ -34,10 +34,19 @@ const KEPT_OUT: [&str; 2] = [
 ];
 const DNF_HOOK: &str = "etc/dnf/libdnf5-plugins/actions.d/osreflog.actions";
 const DROP_IN: &str = "\
-# osreflog: never in a bisect probe (it would record into the real history).
+# osreflog: never in a bisect probe (it would record into the real history). A booted
+# container shares the host's kernel command line, so the marker file says it too.
 [Unit]
 ConditionKernelCommandLine=!osreflog.probe
+ConditionPathExists=!/var/lib/osreflog-probe/manual
 ";
+/// In every probe that waits for a person's verdict (metal, or a booted container): its number.
+/// `osreflog bisect good|bad|skip` run inside sees it and writes [`VERDICT`] instead of asking
+/// the daemon.
+pub const MARKER: &str = "var/lib/osreflog-probe/manual";
+/// The verdict, `good`, `bad` or `skip`, written inside the probe (by the CLI in the probe, or
+/// by the daemon for a verdict given on the host) and read back by the daemon.
+pub const VERDICT: &str = "var/lib/osreflog-probe/verdict";
 
 /// Where a probe's `/home` comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,8 +248,9 @@ pub fn prepare(clone: &Path, prep: &Prep) -> Result<Home, BootError> {
     root.remove(DNF_HOOK)?;
     // A record from an earlier probe of the same state must not be mistaken for this boot's.
     root.remove(&format!("{PROBE_DIR}/booted"))?;
-    root.remove(&format!("{PROBE_DIR}/verdict"))?;
+    root.remove(VERDICT)?;
     root.dir(PROBE_DIR)?;
+    root.write(MARKER, &format!("{}\n", prep.n), 0o644)?;
     root.write(&format!("etc/systemd/system/{UNIT}"), &unit(prep.n), 0o644)?;
     root.symlink(
         &format!("/etc/systemd/system/{UNIT}"),
@@ -257,6 +267,56 @@ pub fn prepare(clone: &Path, prep: &Prep) -> Result<Home, BootError> {
         0o644,
     )?;
     Ok(home)
+}
+
+/// Turns the clone at `clone` into probe `n` booted as a container (`systemd-nspawn --boot`)
+/// for a person to look into: an empty fstab (the container has no disks), osreflog and the
+/// dnf hook kept out as in a metal probe, the marker, and a login message.
+///
+/// # Errors
+/// [`BootError::Refused`] when a path in the clone is a symlink or a mount point; otherwise
+/// if a write fails.
+pub fn prepare_container(clone: &Path, n: u32) -> Result<(), BootError> {
+    let root = Beneath::open(clone)?;
+    root.write("etc/fstab", "", 0o644)?;
+    for dir in KEPT_OUT {
+        root.write(&format!("{dir}/zz-osreflog-probe.conf"), DROP_IN, 0o644)?;
+    }
+    root.remove(DNF_HOOK)?;
+    root.remove(VERDICT)?;
+    root.dir(PROBE_DIR)?;
+    root.write(MARKER, &format!("{n}\n"), 0o644)?;
+    root.write(
+        "etc/motd.d/osreflog-probe",
+        &format!(
+            "This is osreflog bisect probe {n}: a container on a throwaway copy of your system. \
+             Check what you are bisecting, then run: osreflog bisect good, bad or skip (as root).\n"
+        ),
+        0o644,
+    )?;
+    Ok(())
+}
+
+/// The verdict written in the clone, if any (`good`, `bad` or `skip`).
+#[must_use]
+pub fn read_verdict(clone: &Path) -> Option<String> {
+    let v = Beneath::open(clone).ok()?.read(VERDICT).ok()?;
+    let v = v.trim();
+    matches!(v, "good" | "bad" | "skip").then(|| v.to_owned())
+}
+
+/// Writes a verdict given on the host into the clone, where the probe's own would be.
+///
+/// # Errors
+/// If `verdict` isn't one, or the write is refused.
+pub fn write_verdict(clone: &Path, verdict: &str) -> Result<(), BootError> {
+    if !matches!(verdict, "good" | "bad" | "skip") {
+        return Err(BootError::Invalid(format!("not a verdict: {verdict}")));
+    }
+    let root = Beneath::open(clone)?;
+    root.dir(PROBE_DIR)?;
+    root.write(VERDICT, &format!("{verdict}\n"), 0o644)?;
+    Ok(())
 }
 
 /// What the probe recorded when it booted, read from the clone after the reboot.
@@ -421,6 +481,7 @@ UUID=78F6 /mnt/external ntfs-3g defaults,nofail 0 0
         assert!(desktop.contains("Exec=notify-send"));
         assert_eq!(desktop.matches('"').count(), 4, "{desktop}");
         assert!(p.join(PROBE_DIR).is_dir());
+        assert_eq!(std::fs::read_to_string(p.join(MARKER)).unwrap(), "7\n");
 
         // Prepared twice (a retried probe): the same result.
         let first = std::fs::read_to_string(p.join("etc/fstab")).unwrap();
@@ -459,6 +520,27 @@ UUID=78F6 /mnt/external ntfs-3g defaults,nofail 0 0
             prepare(t.path(), &prep()),
             Err(BootError::Refused(_))
         ));
+    }
+
+    #[test]
+    fn a_container_probe_has_no_disks_and_takes_verdicts() {
+        let t = clone_with(FSTAB);
+        let p = t.path();
+        std::fs::create_dir_all(p.join(PROBE_DIR)).unwrap();
+        std::fs::write(p.join(VERDICT), "bad\n").unwrap(); // from an earlier probe of this state
+        prepare_container(p, 5).unwrap();
+        assert_eq!(std::fs::read_to_string(p.join("etc/fstab")).unwrap(), "");
+        assert_eq!(std::fs::read_to_string(p.join(MARKER)).unwrap(), "5\n");
+        assert!(!p.join(DNF_HOOK).exists());
+        let drop_in =
+            std::fs::read_to_string(p.join(KEPT_OUT[0]).join("zz-osreflog-probe.conf")).unwrap();
+        assert!(drop_in.contains("ConditionPathExists=!/var/lib/osreflog-probe/manual"));
+        assert_eq!(read_verdict(p), None);
+        write_verdict(p, "skip").unwrap();
+        assert_eq!(read_verdict(p).as_deref(), Some("skip"));
+        assert!(write_verdict(p, "maybe").is_err());
+        std::fs::write(p.join(VERDICT), "whatever\n").unwrap();
+        assert_eq!(read_verdict(p), None);
     }
 
     #[test]

@@ -5,6 +5,8 @@ After=dbus.socket
 Requires=dbus.socket
 # Never inside a metal bisect probe: it would record into the real history (P7).
 ConditionKernelCommandLine=!osreflog.probe
+# …and in a booted container probe, which shares the host's kernel command line.
+ConditionPathExists=!/var/lib/osreflog-probe/manual
 
 [Service]
 ExecStart=/usr/local/libexec/osreflog/osreflog-user
