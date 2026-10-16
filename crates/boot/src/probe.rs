@@ -211,8 +211,28 @@ WantedBy=multi-user.target
 fn message(n: u32) -> String {
     format!(
         "This boot is osreflog bisect probe {n}: a throwaway copy of your system (its /home too). \
-         Check what you are bisecting, then run: sudo osreflog bisect good, bad or skip. \
+         Check what you are bisecting, then run: sudo osreflog-verdict good, bad or skip. \
          Rebooting returns to your normal system."
+    )
+}
+
+/// In every manual probe: gives the verdict whatever osreflog this state has (a checkpoint
+/// older than manual bisects has a CLI that would look for a daemon that doesn't run here).
+pub const VERDICT_TOOL: &str = "usr/local/bin/osreflog-verdict";
+
+fn verdict_tool(n: u32, after: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+# osreflog bisect probe {n}: the verdict for this probe, read by osreflog {after}.
+case "$1" in
+    good|bad|skip) ;;
+    *) echo "usage: sudo osreflog-verdict good|bad|skip" >&2; exit 2 ;;
+esac
+if [ "$(id -u)" != 0 ]; then echo "as root: sudo osreflog-verdict $1" >&2; exit 1; fi
+printf '%s
+' "$1" > /{VERDICT}.tmp && mv /{VERDICT}.tmp /{VERDICT} && sync || exit 1
+echo "probe {n}: $1, recorded."
+"#
     )
 }
 
@@ -251,6 +271,14 @@ pub fn prepare(clone: &Path, prep: &Prep) -> Result<Home, BootError> {
     root.remove(VERDICT)?;
     root.dir(PROBE_DIR)?;
     root.write(MARKER, &format!("{}\n", prep.n), 0o644)?;
+    root.write(
+        VERDICT_TOOL,
+        &verdict_tool(
+            prep.n,
+            "once your normal system has booted again: reboot now",
+        ),
+        0o755,
+    )?;
     root.write(&format!("etc/systemd/system/{UNIT}"), &unit(prep.n), 0o644)?;
     root.symlink(
         &format!("/etc/systemd/system/{UNIT}"),
@@ -287,10 +315,15 @@ pub fn prepare_container(clone: &Path, n: u32) -> Result<(), BootError> {
     root.dir(PROBE_DIR)?;
     root.write(MARKER, &format!("{n}\n"), 0o644)?;
     root.write(
+        VERDICT_TOOL,
+        &verdict_tool(n, "within a second; this container then stops"),
+        0o755,
+    )?;
+    root.write(
         "etc/motd.d/osreflog-probe",
         &format!(
             "This is osreflog bisect probe {n}: a container on a throwaway copy of your system. \
-             Check what you are bisecting, then run: osreflog bisect good, bad or skip (as root).\n"
+             Check what you are bisecting, then run: osreflog-verdict good, bad or skip (as root).\n"
         ),
         0o644,
     )?;
@@ -482,6 +515,7 @@ UUID=78F6 /mnt/external ntfs-3g defaults,nofail 0 0
         assert_eq!(desktop.matches('"').count(), 4, "{desktop}");
         assert!(p.join(PROBE_DIR).is_dir());
         assert_eq!(std::fs::read_to_string(p.join(MARKER)).unwrap(), "7\n");
+        assert!(p.join(VERDICT_TOOL).is_file());
 
         // Prepared twice (a retried probe): the same result.
         let first = std::fs::read_to_string(p.join("etc/fstab")).unwrap();
@@ -531,6 +565,14 @@ UUID=78F6 /mnt/external ntfs-3g defaults,nofail 0 0
         prepare_container(p, 5).unwrap();
         assert_eq!(std::fs::read_to_string(p.join("etc/fstab")).unwrap(), "");
         assert_eq!(std::fs::read_to_string(p.join(MARKER)).unwrap(), "5\n");
+        let tool = std::fs::read_to_string(p.join(VERDICT_TOOL)).unwrap();
+        assert!(tool.contains("/var/lib/osreflog-probe/verdict"), "{tool}");
+        let check = std::process::Command::new("sh")
+            .arg("-n")
+            .arg(p.join(VERDICT_TOOL))
+            .status()
+            .unwrap();
+        assert!(check.success(), "the verdict tool isn't valid sh");
         assert!(!p.join(DNF_HOOK).exists());
         let drop_in =
             std::fs::read_to_string(p.join(KEPT_OUT[0]).join("zz-osreflog-probe.conf")).unwrap();

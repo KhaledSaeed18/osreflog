@@ -397,7 +397,7 @@ impl Session<'_> {
             since_ms: cur.since_ms,
             how: vec![
                 format!("look into it:  sudo machinectl shell {}", cur.machine),
-                "then, in there or here:  sudo osreflog bisect good | bad | skip".into(),
+                "then, in there:  osreflog-verdict good | bad | skip   or here:  sudo osreflog bisect good | bad | skip".into(),
             ],
             reboot: false,
         });
@@ -427,8 +427,10 @@ impl Session<'_> {
             match osreflog_boot::probe::home_of(&osreflog_boot::probe::original_fstab(&fstab)) {
                 osreflog_boot::probe::Home::Throwaway { from } => {
                     let name = format!("{clone}-home");
-                    probe::snapshot_kept(self.engine, &from, &name)
-                        .map_err(|e| fail(&format!("snapshotting {from}: {e}")))?;
+                    if let Err(e) = probe::snapshot_kept(self.engine, &from, &name) {
+                        probe::delete_kept(self.engine, &clone);
+                        return Err(fail(&format!("snapshotting {from}: {e}")));
+                    }
                     Some(name)
                 }
                 osreflog_boot::probe::Home::InRoot => None,
@@ -449,6 +451,7 @@ impl Session<'_> {
             if let Some(h) = &home {
                 probe::delete_kept(s.engine, h);
             }
+            let _ = std::fs::remove_file(s.engine.layout().probes().join(PENDING));
         };
         if let Err(e) = osreflog_boot::probe::prepare(path, &prep) {
             cleanup(self);
@@ -895,7 +898,7 @@ fn metal_waiting(cur: &Current) -> Waiting {
                 "reboot into it:  systemctl reboot  (the next boot only, kernel {}; the one after is your normal system)",
                 cur.kernel
             ),
-            "in the probe: check, then  sudo osreflog bisect good | bad | skip  and reboot".into(),
+            "in the probe: check, then  sudo osreflog-verdict good | bad | skip  and reboot".into(),
             "or answer here without rebooting:  sudo osreflog bisect good | bad | skip".into(),
         ],
         reboot: true,

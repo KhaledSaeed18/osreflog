@@ -35,7 +35,12 @@ if [[ $cmdline == *osreflog.probe=* ]]; then
     [ "$(cat /var/lib/osreflog-probe/manual 2>/dev/null)" = "$n" ] || fail "no marker for probe $n"
     if grep -q 'mode = broken' "$DIR/app.conf" 2>/dev/null; then v=bad; else v=good; fi
     echo "probe $n: $v ($(grep -c . "$DIR/app.conf" 2>/dev/null) lines in app.conf)"
-    osreflog bisect "$v" --no-reboot | sed 's/^/  | /'
+    # Both ways a person can answer in a probe: the probe's own tool, and the CLI.
+    if [ $((n % 2)) = 1 ]; then
+        osreflog-verdict "$v" | sed 's/^/  | /'
+    else
+        osreflog bisect "$v" --no-reboot | sed 's/^/  | /'
+    fi
     [ "$(cat /var/lib/osreflog-probe/verdict)" = "$v" ] || fail "the verdict wasn't written in the probe"
     reboot_now
 fi
