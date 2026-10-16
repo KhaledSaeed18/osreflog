@@ -72,7 +72,6 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Re-check the ledger's hash chain against its records.
     /// Causes the live witness recorded, newest first: who changed what.
     Causes {
         #[arg(short = 'n', long, default_value_t = 20)]
@@ -95,6 +94,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Re-check the ledger's hash chain against its records.
     Verify {
         #[arg(long)]
         json: bool,
