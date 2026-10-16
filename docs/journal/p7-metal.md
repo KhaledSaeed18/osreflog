@@ -202,3 +202,4 @@ Everything here is unit-tested; nothing ran as root, so nothing ran in the VM or
    sudo sh -c 'scripts/install-dev.sh && scripts/p7/manual.sh'
    ```
 3. The P6 seeded suite, since `bisect run` now drives the shared `TwoLevel` search: `sudo scripts/p6/seeded.sh`.
+4. Once 1–3 pass, **P7d on the laptop** (the P7 exit), by hand for the first time: `sudo scripts/p7/p7d-wifi.sh start`, then per probe reboot, `sudo osreflog-p7d-check` in the probe, reboot; at the end `sudo scripts/p7/p7d-wifi.sh finish`. The seeded regression is NetworkManager's `wifi.powersave` 2 → 3 among three harmless causes; the check reads `iw dev wlp2s0 get power_save` once Wi-Fi is up (dry-run tonight against this card with a stand-in verdict tool: "Power save: on (connection: connected)" → bad, as it should be today). `start --hands-free` adds a probe-side unit that judges and reboots and a default-side one that reboots into each armed probe (at most 12 reboots), for later runs.
