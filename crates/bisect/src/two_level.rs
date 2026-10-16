@@ -94,6 +94,10 @@ pub struct TwoLevel {
     phase: Phase,
     /// Every verdict recorded, with the step it answered.
     pub history: Vec<(Step, Verdict)>,
+    /// How many causes the interval had, once [`Self::causes`] said: replaying the history
+    /// needs it again.
+    #[serde(default)]
+    causes: Option<usize>,
 }
 
 impl TwoLevel {
@@ -104,6 +108,7 @@ impl TwoLevel {
             last: last.max(1),
             phase: Phase::BadEnd,
             history: Vec::new(),
+            causes: None,
         }
     }
 
@@ -202,9 +207,36 @@ impl TwoLevel {
         };
     }
 
+    /// Takes back the last verdict (a person's mistake): the search is rebuilt from the verdicts
+    /// before it, so [`Self::next`] asks for that probe again. Returns what was taken back;
+    /// `None` when there is no verdict yet. Works on a finished search too.
+    pub fn take_back(&mut self) -> Option<(Step, Verdict)> {
+        let last = self.history.pop()?;
+        let mut m = TwoLevel::new(self.last);
+        for (step, verdict) in &self.history {
+            if let (Step::Causes { .. }, Some(n)) = (m.next(), self.causes) {
+                m.causes(n);
+            }
+            debug_assert_eq!(
+                &m.next(),
+                step,
+                "replaying the verdicts asked a different step"
+            );
+            m.record(*verdict);
+        }
+        if let (Step::Causes { .. }, Some(n)) = (m.next(), self.causes) {
+            m.causes(n);
+        }
+        // The cause count stays known even if the replay stopped before asking for it.
+        m.causes = self.causes;
+        *self = m;
+        Some(last)
+    }
+
     /// The number of causes between the checkpoints [`Step::Causes`] named.
     pub fn causes(&mut self, n: usize) {
         if let Phase::NeedCauses { from, to } = self.phase {
+            self.causes = Some(n);
             self.phase = if n == 0 {
                 done(Answer::NoCauses { from, to })
             } else {
@@ -382,6 +414,102 @@ mod tests {
             drive(4, 3, 5, None).0,
             Answer::NotARecordedCause { from: 2, to: 3 }
         );
+    }
+
+    #[test]
+    fn a_verdict_taken_back_is_asked_again() {
+        // The P8d slip: three causes, probe 2 (after 1 cause) wrongly said bad.
+        let mut m = TwoLevel::new(1);
+        m.record(Verdict::Bad);
+        m.causes(3);
+        let asked = m.next();
+        assert!(matches!(
+            asked,
+            Step::AfterCauses { k: 1, .. } | Step::AfterCauses { k: 2, .. }
+        ));
+        m.record(if matches!(asked, Step::AfterCauses { k: 1, .. }) {
+            Verdict::Bad
+        } else {
+            Verdict::Good
+        });
+        let wrong_answer = m.next();
+        // Take it back: the same probe is asked again, and the right verdict finds the cause.
+        let back = m.take_back().unwrap();
+        assert_eq!(back.0, asked);
+        assert_eq!(m.next(), asked);
+        assert_eq!(m.history.len(), 1);
+        let json = serde_json::to_string(&m).unwrap();
+        let mut m: TwoLevel = serde_json::from_str(&json).unwrap();
+        m.record(if matches!(asked, Step::AfterCauses { k: 1, .. }) {
+            Verdict::Good
+        } else {
+            Verdict::Bad
+        });
+        while let Step::AfterCauses { k, .. } = m.next() {
+            m.record(if k >= 2 { Verdict::Bad } else { Verdict::Good });
+        }
+        assert_eq!(
+            m.next(),
+            Step::Done(Answer::Cause {
+                from: 0,
+                to: 1,
+                k: 2
+            })
+        );
+        assert_ne!(m.next(), wrong_answer);
+
+        // Back to the very start, through the cause count.
+        while m.take_back().is_some() {}
+        assert_eq!(
+            m.next(),
+            Step::Checkpoint {
+                index: 1,
+                bad_end: true
+            }
+        );
+        assert!(m.take_back().is_none());
+    }
+
+    #[test]
+    fn taking_back_every_verdict_replays_any_search() {
+        // For every culprit position: answer right, take everything back one by one, and each
+        // time the step asked again is the one that verdict answered.
+        for last in 1..=6 {
+            for cp_bad in 1..=last {
+                for causes in 0..=5 {
+                    let mut m = TwoLevel::new(last);
+                    let mut steps = Vec::new();
+                    loop {
+                        match m.next() {
+                            Step::Checkpoint { index, .. } => {
+                                steps.push(m.next());
+                                m.record(if index >= cp_bad {
+                                    Verdict::Bad
+                                } else {
+                                    Verdict::Good
+                                });
+                            }
+                            Step::Causes { .. } => m.causes(causes),
+                            Step::AfterCauses { k, .. } => {
+                                steps.push(m.next());
+                                m.record(if k >= causes.max(1) {
+                                    Verdict::Bad
+                                } else {
+                                    Verdict::Good
+                                });
+                            }
+                            Step::Done(_) => break,
+                        }
+                    }
+                    while let Some((step, _)) = m.take_back() {
+                        assert_eq!(Some(&step), steps.last());
+                        assert_eq!(m.next(), step);
+                        steps.pop();
+                    }
+                    assert_eq!(steps, Vec::<Step>::new());
+                }
+            }
+        }
     }
 
     #[test]
