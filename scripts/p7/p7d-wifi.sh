@@ -39,6 +39,10 @@ install_check() {
     cat >"$CHECK" <<EOF
 #!/bin/sh
 # osreflog P7d: in a bisect probe, judge Wi-Fi power save on $dev and give the verdict.
+if [ ! -e /var/lib/osreflog-probe/manual ]; then
+    echo "this is your normal system, not a probe: reboot into the armed probe first (systemctl reboot)" >&2
+    exit 1
+fi
 dev=$dev
 state=
 for i in \$(seq 90); do
