@@ -38,6 +38,8 @@ pub enum Request {
     BisectVerdict(String),
     BisectRearm,
     BisectReset,
+    /// Take back the last verdict of a manual bisect.
+    BisectUndoVerdict,
 }
 
 /// Why a call has no answer: the daemon isn't there, or something else went wrong.
@@ -139,9 +141,13 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             (None, Request::BisectRun(_)) => {
                 Reply::BisectRefused("start".into(), unreachable_bus())
             }
-            (None, Request::BisectVerdict(_) | Request::BisectRearm | Request::BisectReset) => {
-                Reply::BisectRefused("act".into(), unreachable_bus())
-            }
+            (
+                None,
+                Request::BisectVerdict(_)
+                | Request::BisectRearm
+                | Request::BisectReset
+                | Request::BisectUndoVerdict,
+            ) => Reply::BisectRefused("act".into(), unreachable_bus()),
             (None, Request::Undo { id, .. }) => Reply::Undone(id, Err(unreachable_bus())),
             (None, Request::Diff { from, to, all }) => Reply::Diff {
                 from,
@@ -169,6 +175,9 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             }
             (Some(c), Request::BisectRearm) => {
                 bisect_action(c, &replies, "rearm", c.bisect_rearm().await).await
+            }
+            (Some(c), Request::BisectUndoVerdict) => {
+                bisect_action(c, &replies, "undo-verdict", c.bisect_undo_verdict().await).await
             }
             (Some(c), Request::BisectReset) => {
                 bisect_action(c, &replies, "reset", c.bisect_reset().await).await

@@ -83,6 +83,7 @@ pub fn refused(ui: &Rc<Ui>, what: &str, f: &Failure) {
         "verdict" => "The verdict wasn't taken",
         "rearm" => "The probe wasn't armed again",
         "reset" => "The bisect wasn't stopped",
+        "undo-verdict" => "The verdict wasn't taken back",
         _ => "That didn't work",
     };
     let dialog = adw::AlertDialog::new(Some(title), Some(&f.message));
@@ -415,6 +416,26 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
             b.connect_clicked(move |_| crate::select_cause(&ui3, id));
             ui.detail.append(&b);
         }
+    }
+
+    if s.args.manual && !s.probes.is_empty() {
+        let last = s.probes.last().map(|p| p.what.clone()).unwrap_or_default();
+        let back = pill("Take back the last verdict", None);
+        back.set_tooltip_text(Some(&format!(
+            "A mistake? The verdict for “{last}” is forgotten and that probe is asked again{}",
+            if s.running {
+                ""
+            } else {
+                ": the bisect goes on"
+            }
+        )));
+        back.set_halign(gtk::Align::Start);
+        let ui3 = Rc::clone(ui);
+        back.connect_clicked(move |b| {
+            b.set_sensitive(false);
+            let _ = ui3.requests.try_send(Request::BisectUndoVerdict);
+        });
+        ui.detail.append(&back);
     }
 
     let probes = view::probe_rows(s);
