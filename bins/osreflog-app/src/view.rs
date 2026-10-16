@@ -543,6 +543,219 @@ pub fn applied_rows(a: &osreflog_undo::Applied) -> Vec<(String, String, bool)> {
         .collect()
 }
 
+/// The tier a person picks in the bisect form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TierChoice {
+    Auto,
+    Nspawn,
+    Vm,
+    Metal,
+}
+
+/// The bisect form, as filled in: one field per row of the form, switches included.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BisectForm {
+    pub good: String,
+    pub bad: String,
+    /// A person gives the verdicts (`bisect start`), not a test (`bisect run`).
+    pub manual: bool,
+    pub tier: TierChoice,
+    pub needs_kernel: bool,
+    pub needs_hardware: bool,
+    /// nspawn, automatic: boot systemd in the container.
+    pub boot: bool,
+    /// The test, for an automatic bisect: a shell snippet, or a script starting with `#!`.
+    pub test: String,
+}
+
+/// The daemon's arguments for a form, or what's wrong with it.
+///
+/// # Errors
+/// A sentence for the person: no good end, no test, a tier that can't do it.
+pub fn bisect_args(f: &BisectForm) -> Result<osreflog_bisect::Args, String> {
+    use osreflog_bisect::{Need, Tier};
+    if f.good.is_empty() {
+        return Err("Pick a checkpoint where things still worked.".into());
+    }
+    if f.good == f.bad {
+        return Err("The good and bad ends are the same checkpoint.".into());
+    }
+    let mut needs = Vec::new();
+    if f.needs_kernel {
+        needs.push(Need::Kernel);
+    }
+    if f.needs_hardware {
+        needs.push(Need::Hardware);
+    }
+    let tier = match f.tier {
+        TierChoice::Auto => Tier::auto(&needs, f.manual)?,
+        TierChoice::Nspawn => Tier::Nspawn,
+        TierChoice::Vm if f.manual => {
+            return Err("Verdicts by hand need a container you enter, or a reboot (metal).".into());
+        }
+        TierChoice::Vm => Tier::Vm,
+        TierChoice::Metal if !f.manual => {
+            return Err("A metal probe can't judge itself: give the verdicts by hand.".into());
+        }
+        TierChoice::Metal => Tier::Metal,
+    };
+    let test = f.test.trim();
+    if !f.manual && test.is_empty() {
+        return Err("An automatic bisect needs a test: exit 0 good, 125 skip, 1–127 bad.".into());
+    }
+    let script = if f.manual {
+        String::new()
+    } else if test.starts_with("#!") {
+        format!("{test}\n")
+    } else {
+        format!("#!/bin/sh\n{test}\n")
+    };
+    Ok(osreflog_bisect::Args {
+        good: f.good.clone(),
+        bad: f.bad.clone(),
+        tier,
+        boot: f.boot && !f.manual && tier == Tier::Nspawn,
+        test: script,
+        timeout_s: None,
+        manual: f.manual,
+    })
+}
+
+fn tier_word(t: osreflog_bisect::Tier) -> &'static str {
+    match t {
+        osreflog_bisect::Tier::Nspawn => "containers",
+        osreflog_bisect::Tier::Vm => "VMs",
+        osreflog_bisect::Tier::Metal => "reboots (metal)",
+    }
+}
+
+/// "c000128 … c000129, reboots (metal), verdicts by hand".
+#[must_use]
+pub fn session_title(s: &osreflog_bisect::Status) -> String {
+    format!(
+        "{} … {}, {}{}",
+        s.args.good,
+        s.args.bad,
+        tier_word(s.args.tier),
+        if s.args.manual {
+            ", verdicts by hand"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Where a session stands, in a few words.
+#[must_use]
+pub fn session_state(s: &osreflog_bisect::Status) -> String {
+    use osreflog_bisect::Finding;
+    if let Some(w) = &s.waiting {
+        return if w.reboot {
+            format!("Probe {} is armed: reboot into it", w.probe)
+        } else {
+            format!("Probe {} waits for your verdict", w.probe)
+        };
+    }
+    if s.running {
+        return format!("Running: {} probes so far", s.probes.len());
+    }
+    if let Some(e) = &s.error {
+        return format!("Failed: {e}");
+    }
+    match &s.finding {
+        Some(Finding::Cause { culprit, .. }) => format!("Found #{} {}", culprit.id, culprit.label),
+        Some(Finding::Causes { candidates }) => format!("One of {} causes", candidates.len()),
+        Some(Finding::Checkpoint { first_bad, .. }) => format!("First bad checkpoint {first_bad}"),
+        Some(Finding::NotReproduced { .. }) => "Not reproduced".to_owned(),
+        None => "Finished".to_owned(),
+    }
+}
+
+/// A probe as a row: (icon, title, subtitle, output).
+#[must_use]
+pub fn probe_rows(s: &osreflog_bisect::Status) -> Vec<(&'static str, String, String, String)> {
+    use osreflog_bisect::Verdict;
+    s.probes
+        .iter()
+        .map(|p| {
+            let (icon, word) = match p.verdict {
+                Verdict::Good => ("object-select-symbolic", "good"),
+                Verdict::Bad => ("process-stop-symbolic", "bad"),
+                Verdict::Skip => ("media-skip-forward-symbolic", "skipped"),
+            };
+            let mut sub = format!("{word} · {}.{} s", p.ms / 1000, p.ms % 1000 / 100);
+            if let Some(kib) = p.peak_rss_kib {
+                let _ = write!(sub, " · qemu {} MiB", kib / 1024);
+            }
+            if !p.approximate.is_empty() {
+                let _ = write!(
+                    sub,
+                    " · {} approximate",
+                    plural(p.approximate.len() as u64, "path", "paths")
+                );
+            }
+            if !p.detail.is_empty() {
+                let _ = write!(sub, " · {}", p.detail);
+            }
+            (icon, p.what.clone(), sub, p.output.clone())
+        })
+        .collect()
+}
+
+/// What a finished session found: a title, lines under it, and the cause to open, if one.
+#[must_use]
+pub fn finding(s: &osreflog_bisect::Status) -> Option<(String, Vec<String>, Option<i64>)> {
+    use osreflog_bisect::Finding;
+    if let Some(e) = &s.error {
+        return Some(("The bisect failed".into(), vec![e.clone()], None));
+    }
+    Some(match s.finding.as_ref()? {
+        Finding::Cause {
+            culprit,
+            between,
+            approximate,
+        } => {
+            let mut lines = vec![
+                format!("{} {}", culprit.kind, culprit.label),
+                format!("between {} (good) and {} (bad)", between.0, between.1),
+            ];
+            lines.extend(culprit.paths.iter().take(10).cloned());
+            if !approximate.is_empty() {
+                lines.push(format!("approximate replays: {}", approximate.join(", ")));
+            }
+            (
+                format!("First bad cause: #{}", culprit.id),
+                lines,
+                Some(culprit.id),
+            )
+        }
+        Finding::Causes { candidates } => (
+            "One of these causes".into(),
+            candidates
+                .iter()
+                .map(|c| format!("#{} {} {}", c.id, c.kind, c.label))
+                .collect(),
+            None,
+        ),
+        Finding::Checkpoint {
+            last_good,
+            first_bad,
+            why,
+        } => (
+            format!("First bad checkpoint: {first_bad}"),
+            vec![format!("last good {last_good}"), why.clone()],
+            None,
+        ),
+        Finding::NotReproduced { detail } => {
+            let next = s.args.tier.next(s.args.manual).map_or(String::new(), |t| {
+                format!("Try again with {}.", tier_word(t))
+            });
+            ("Not reproduced".into(), vec![detail.clone(), next], None)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -876,6 +1089,161 @@ mod tests {
             undo_summary(&preview(vec![])),
             "Nothing recorded for this cause can be undone."
         );
+    }
+
+    fn form() -> BisectForm {
+        BisectForm {
+            good: "c000128".into(),
+            bad: "c000129".into(),
+            manual: false,
+            tier: TierChoice::Auto,
+            needs_kernel: false,
+            needs_hardware: false,
+            boot: false,
+            test: "grep -q 'port = 80' /etc/app.conf".into(),
+        }
+    }
+
+    #[test]
+    fn the_form_becomes_the_daemons_arguments() {
+        use osreflog_bisect::Tier;
+        let a = bisect_args(&form()).unwrap();
+        assert_eq!(a.tier, Tier::Nspawn);
+        assert_eq!(a.test, "#!/bin/sh\ngrep -q 'port = 80' /etc/app.conf\n");
+        assert!(!a.manual);
+        let a = bisect_args(&BisectForm {
+            needs_kernel: true,
+            ..form()
+        })
+        .unwrap();
+        assert_eq!(a.tier, Tier::Vm);
+        assert!(
+            bisect_args(&BisectForm {
+                needs_hardware: true,
+                ..form()
+            })
+            .is_err()
+        );
+        assert!(
+            bisect_args(&BisectForm {
+                test: " ".into(),
+                ..form()
+            })
+            .is_err()
+        );
+        assert!(
+            bisect_args(&BisectForm {
+                tier: TierChoice::Metal,
+                ..form()
+            })
+            .is_err()
+        );
+        assert!(
+            bisect_args(&BisectForm {
+                bad: "c000128".into(),
+                ..form()
+            })
+            .is_err()
+        );
+        let a = bisect_args(&BisectForm {
+            test: "#!/bin/bash\ntrue".into(),
+            ..form()
+        })
+        .unwrap();
+        assert_eq!(a.test, "#!/bin/bash\ntrue\n");
+
+        let by_hand = BisectForm {
+            manual: true,
+            test: String::new(),
+            needs_hardware: true,
+            ..form()
+        };
+        let a = bisect_args(&by_hand).unwrap();
+        assert_eq!((a.tier, a.manual, a.test.as_str()), (Tier::Metal, true, ""));
+        assert!(
+            bisect_args(&BisectForm {
+                tier: TierChoice::Vm,
+                ..by_hand.clone()
+            })
+            .is_err()
+        );
+        let a = bisect_args(&BisectForm {
+            needs_hardware: false,
+            ..by_hand
+        })
+        .unwrap();
+        assert_eq!(a.tier, Tier::Nspawn);
+    }
+
+    #[test]
+    fn a_session_reads_as_state_probes_and_finding() {
+        use osreflog_bisect::{Culprit, Finding, ProbeRecord, Status, Verdict, Waiting};
+        let args = bisect_args(&BisectForm {
+            manual: true,
+            test: String::new(),
+            needs_hardware: true,
+            ..form()
+        })
+        .unwrap();
+        let mut s = Status {
+            args,
+            running: true,
+            started_ms: 0,
+            log: vec![],
+            probes: vec![ProbeRecord {
+                what: "checkpoint c000129 (the bad end)".into(),
+                verdict: Verdict::Bad,
+                ms: 1_082_800,
+                peak_rss_kib: None,
+                approximate: vec![],
+                detail: String::new(),
+                output: String::new(),
+            }],
+            finding: None,
+            error: None,
+            waiting: Some(Waiting {
+                probe: 2,
+                what: "after #679".into(),
+                since_ms: 0,
+                how: vec![],
+                reboot: true,
+            }),
+        };
+        assert_eq!(
+            session_title(&s),
+            "c000128 … c000129, reboots (metal), verdicts by hand"
+        );
+        assert_eq!(session_state(&s), "Probe 2 is armed: reboot into it");
+        let rows = probe_rows(&s);
+        assert_eq!(rows[0].0, "process-stop-symbolic");
+        assert_eq!(rows[0].2, "bad · 1082.8 s");
+        assert_eq!(finding(&s), None);
+
+        s.waiting = None;
+        s.running = false;
+        s.finding = Some(Finding::Cause {
+            culprit: Culprit {
+                id: 680,
+                kind: "command".into(),
+                label: "p7d-wifi.sh start".into(),
+                started_ms: 0,
+                paths: vec!["/etc/NetworkManager/conf.d/90-osreflog-p7d.conf".into()],
+            },
+            between: ("c000128".into(), "c000129".into()),
+            approximate: vec![],
+        });
+        assert_eq!(session_state(&s), "Found #680 p7d-wifi.sh start");
+        let (title, lines, open) = finding(&s).unwrap();
+        assert_eq!(title, "First bad cause: #680");
+        assert_eq!(lines[1], "between c000128 (good) and c000129 (bad)");
+        assert_eq!(open, Some(680));
+
+        s.finding = Some(Finding::NotReproduced {
+            detail: "you said good on the bad end".into(),
+        });
+        s.args.tier = osreflog_bisect::Tier::Nspawn;
+        let (_, lines, _) = finding(&s).unwrap();
+        assert_eq!(lines[1], "Try again with reboots (metal).");
     }
 
     #[test]

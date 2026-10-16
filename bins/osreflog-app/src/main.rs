@@ -3,6 +3,7 @@
 //! reading without a password.
 
 mod backend;
+mod bisect_page;
 mod view;
 
 use std::cell::RefCell;
@@ -64,6 +65,9 @@ enum Selected {
     },
     /// The undo of a cause: its preview, then its result.
     Undo(i64),
+    /// The bisect form, and the session it starts.
+    BisectForm,
+    Bisect,
 }
 
 /// What a list shows now (its keys and the day it was built on), so an unchanged refresh
@@ -90,6 +94,10 @@ struct Ui {
     /// What the two lists show now, so an unchanged refresh doesn't rebuild them.
     shown_causes: Shown<i64>,
     shown_checkpoints: Shown<(String, bool)>,
+    /// The sidebar's Bisect view, the session as last read, and as the session page shows it.
+    bisect_side: gtk::Box,
+    bisect_status: RefCell<Option<osreflog_bisect::Status>>,
+    shown_session: RefCell<Option<osreflog_bisect::Status>>,
 }
 
 /// A row showing text from the system as it is. Setters in this order on purpose: with the
@@ -133,6 +141,7 @@ fn build(app: &adw::Application) {
     side_header.set_title_widget(Some(&title));
     let timeline = page_box();
     let checkpoints = page_box();
+    let bisect_side = page_box();
     let views = adw::ViewStack::new();
     views.add_titled_with_icon(
         &scrolled(&timeline),
@@ -146,9 +155,15 @@ fn build(app: &adw::Application) {
         "Checkpoints",
         "bookmark-new-symbolic",
     );
+    views.add_titled_with_icon(
+        &scrolled(&bisect_side),
+        Some("bisect"),
+        "Bisect",
+        "edit-find-symbolic",
+    );
     let switcher = adw::ViewSwitcher::builder()
         .stack(&views)
-        .policy(adw::ViewSwitcherPolicy::Wide)
+        .policy(adw::ViewSwitcherPolicy::Narrow)
         .build();
     let switcher_bar = gtk::CenterBox::new();
     switcher_bar.set_center_widget(Some(&switcher));
@@ -205,7 +220,7 @@ fn build(app: &adw::Application) {
     let split = adw::NavigationSplitView::new();
     split.set_sidebar(Some(&side_page));
     split.set_content(Some(&content_page));
-    split.set_min_sidebar_width(340.0);
+    split.set_min_sidebar_width(380.0);
     split.set_max_sidebar_width(480.0);
 
     let window = adw::ApplicationWindow::builder()
@@ -240,6 +255,9 @@ fn build(app: &adw::Application) {
         names: RefCell::new(Vec::new()),
         shown_causes: RefCell::new(None),
         shown_checkpoints: RefCell::new(None),
+        bisect_side,
+        bisect_status: RefCell::new(None),
+        shown_session: RefCell::new(None),
     });
 
     let ui2 = Rc::clone(&ui);
@@ -252,6 +270,8 @@ fn build(app: &adw::Application) {
                         show_detail(&ui2, id, r);
                     }
                 }
+                Reply::Bisect(r) => bisect_page::on_status(&ui2, r),
+                Reply::BisectRefused(what, f) => bisect_page::refused(&ui2, &what, &f),
                 Reply::UndoPlan(id, r) => {
                     if *ui2.selected.borrow() == Some(Selected::Undo(id)) {
                         show_undo_plan(&ui2, id, r);
@@ -281,7 +301,8 @@ fn build(app: &adw::Application) {
         }
     });
     let _ = requests.try_send(Request::Refresh);
-    // Development: open a page at start, `since:c000134`, `cause:765` or `undo:765` (input through GTK's
+    // Development: open a page at start, `since:c000134`, `cause:765`, `undo:765`, `bisect:session`
+    // or `bisect:new` (input through GTK's
     // Broadway backend, used to look at the window from a browser, drops clicks).
     if let Ok(open) = std::env::var("OSREFLOG_APP_OPEN") {
         match open.split_once(':') {
@@ -291,16 +312,24 @@ fn build(app: &adw::Application) {
                     select_cause(&ui, id);
                 }
             }
+            Some(("bisect", "session")) => bisect_page::select_session(&ui),
+            Some(("bisect", "new")) => {
+                // The form needs the checkpoint names: build it once the first history is in.
+                let ui5 = Rc::clone(&ui);
+                glib::timeout_add_seconds_local_once(2, move || bisect_page::show_form(&ui5));
+            }
             Some(("undo", id)) => {
                 if let Ok(id) = id.parse() {
                     select_undo(&ui, id);
                 }
             }
             _ => eprintln!(
-                "osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint>, cause:<id> or undo:<id>"
+                "osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint>, cause:<id>, undo:<id>, bisect:session or bisect:new"
             ),
         }
     }
+    let ui4 = Rc::clone(&ui);
+    glib::timeout_add_seconds_local(1, move || bisect_page::tick(&ui4));
     let refresh = requests.clone();
     glib::timeout_add_seconds_local(REFRESH_S, move || {
         if refresh.try_send(Request::Refresh).is_err() {
@@ -345,9 +374,9 @@ fn select_diff(ui: &Rc<Ui>, from: &str, to: &str, all: bool) {
     });
 }
 
-fn show_history(ui: &Rc<Ui>, r: Result<History, Failure>) {
-    let (status, causes, log) = match r {
-        Ok(v) => v,
+fn show_history(ui: &Rc<Ui>, r: Result<Box<History>, Failure>) {
+    let (status, causes, log, bisect) = match r {
+        Ok(v) => *v,
         Err(f) => {
             if f.down {
                 ui.down.set_title("osreflog isn't running");
@@ -370,6 +399,12 @@ fn show_history(ui: &Rc<Ui>, r: Result<History, Failure>) {
     let today = day_of(0);
     show_causes(ui, &causes, &today);
     show_checkpoints(ui, &log, &today);
+    bisect_page::sidebar(ui, bisect.as_ref());
+    if *ui.selected.borrow() == Some(Selected::Bisect)
+        && ui.shown_session.borrow().as_ref() != bisect.as_ref()
+    {
+        bisect_page::on_status(ui, Ok(bisect.map(Box::new)));
+    }
     ui.sidebar.set_visible_child_name("views");
 }
 
@@ -632,7 +667,7 @@ fn diff_files(ui: &Rc<Ui>, from: &str, all: bool, r: &DiffReport) {
     let groups = view::diff_groups(r);
     if groups.is_empty() {
         let none = adw::StatusPage::builder()
-            .icon_name("emblem-ok-symbolic")
+            .icon_name("object-select-symbolic")
             .title("No file changes")
             .description(if r.hidden > 0 {
                 format!("{} package and noise changes are hidden", r.hidden)
@@ -703,7 +738,7 @@ fn select_undo(ui: &Rc<Ui>, id: i64) {
 fn verdict_icon(verdict: &str) -> &'static str {
     match verdict {
         "restore" => "edit-undo-symbolic",
-        "same" => "emblem-ok-symbolic",
+        "same" => "object-select-symbolic",
         "conflict" => "dialog-warning-symbolic",
         _ => "action-unavailable-symbolic",
     }
@@ -866,7 +901,7 @@ fn show_undone(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Applied>, Fail
     for (path, line, ok) in rows {
         let row = action_row(&path, &line);
         row.add_prefix(&gtk::Image::from_icon_name(if ok {
-            "emblem-ok-symbolic"
+            "object-select-symbolic"
         } else {
             "dialog-warning-symbolic"
         }));

@@ -1022,6 +1022,7 @@ dependencies = [
  "async-channel",
  "gtk4",
  "libadwaita",
+ "osreflog-bisect",
  "osreflog-client",
  "osreflog-model",
  "osreflog-undo",

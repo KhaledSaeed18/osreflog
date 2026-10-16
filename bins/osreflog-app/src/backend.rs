@@ -18,11 +18,26 @@ pub enum Request {
     Show(i64),
     /// What changed from one checkpoint to another (`@{now}`: the live system). `all`: package
     /// files and noise too.
-    Diff { from: String, to: String, all: bool },
+    Diff {
+        from: String,
+        to: String,
+        all: bool,
+    },
     /// What undoing a cause would do (nothing is written).
     UndoPlan(i64),
     /// Undo a cause exactly as the preview with this digest showed it; polkit asks.
-    Undo { id: i64, digest: String },
+    Undo {
+        id: i64,
+        digest: String,
+    },
+    /// The current or last bisect.
+    BisectStatus,
+    /// Start a bisect; polkit asks.
+    BisectRun(Box<osreflog_bisect::Args>),
+    /// `good`, `bad` or `skip` for the waiting probe.
+    BisectVerdict(String),
+    BisectRearm,
+    BisectReset,
 }
 
 /// Why a call has no answer: the daemon isn't there, or something else went wrong.
@@ -41,12 +56,17 @@ impl From<ClientError> for Failure {
     }
 }
 
-/// The status, the timeline's causes and the checkpoint list.
-pub type History = (Status, Vec<Cause>, Vec<LogEntry>);
+/// The status, the timeline's causes, the checkpoint list and the current or last bisect.
+pub type History = (
+    Status,
+    Vec<Cause>,
+    Vec<LogEntry>,
+    Option<osreflog_bisect::Status>,
+);
 
 #[derive(Debug)]
 pub enum Reply {
-    History(Result<History, Failure>),
+    History(Result<Box<History>, Failure>),
     Detail(i64, Result<CauseDetail, Failure>),
     Diff {
         from: String,
@@ -56,6 +76,10 @@ pub enum Reply {
     },
     UndoPlan(i64, Result<Box<osreflog_undo::Preview>, Failure>),
     Undone(i64, Result<Box<osreflog_undo::Applied>, Failure>),
+    Bisect(Result<Option<Box<osreflog_bisect::Status>>, Failure>),
+    /// A bisect action (start, verdict, rearm, reset) was refused or failed; a status follows
+    /// every action either way.
+    BisectRefused(String, Failure),
 }
 
 /// Starts the thread. Requests go in through the first channel, replies come out of the second.
@@ -95,6 +119,7 @@ async fn history(c: &Client) -> Result<History, ClientError> {
         c.status().await?,
         c.causes(LIMIT).await?,
         c.log(CHECKPOINTS).await?,
+        c.bisect_status().await?,
     ))
 }
 
@@ -110,6 +135,13 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             (None, Request::Refresh) => Reply::History(Err(unreachable_bus())),
             (None, Request::Show(id)) => Reply::Detail(id, Err(unreachable_bus())),
             (None, Request::UndoPlan(id)) => Reply::UndoPlan(id, Err(unreachable_bus())),
+            (None, Request::BisectStatus) => Reply::Bisect(Err(unreachable_bus())),
+            (None, Request::BisectRun(_)) => {
+                Reply::BisectRefused("start".into(), unreachable_bus())
+            }
+            (None, Request::BisectVerdict(_) | Request::BisectRearm | Request::BisectReset) => {
+                Reply::BisectRefused("act".into(), unreachable_bus())
+            }
             (None, Request::Undo { id, .. }) => Reply::Undone(id, Err(unreachable_bus())),
             (None, Request::Diff { from, to, all }) => Reply::Diff {
                 from,
@@ -117,9 +149,29 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
                 all,
                 result: Err(unreachable_bus()),
             },
-            (Some(c), Request::Refresh) => Reply::History(history(c).await.map_err(Failure::from)),
+            (Some(c), Request::Refresh) => {
+                Reply::History(history(c).await.map(Box::new).map_err(Failure::from))
+            }
             (Some(c), Request::Show(id)) => {
                 Reply::Detail(id, c.show(id).await.map_err(Failure::from))
+            }
+            (Some(c), Request::BisectStatus) => Reply::Bisect(
+                c.bisect_status()
+                    .await
+                    .map(|s| s.map(Box::new))
+                    .map_err(Failure::from),
+            ),
+            (Some(c), Request::BisectRun(args)) => {
+                bisect_action(c, &replies, "start", c.bisect_run(&args).await.map(|_| ())).await
+            }
+            (Some(c), Request::BisectVerdict(v)) => {
+                bisect_action(c, &replies, "verdict", c.bisect_verdict(&v).await).await
+            }
+            (Some(c), Request::BisectRearm) => {
+                bisect_action(c, &replies, "rearm", c.bisect_rearm().await).await
+            }
+            (Some(c), Request::BisectReset) => {
+                bisect_action(c, &replies, "reset", c.bisect_reset().await).await
             }
             (Some(c), Request::UndoPlan(id)) => Reply::UndoPlan(
                 id,
@@ -152,6 +204,8 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             Reply::Diff { result, .. } => result.as_ref().err(),
             Reply::UndoPlan(_, r) => r.as_ref().err(),
             Reply::Undone(_, r) => r.as_ref().err(),
+            Reply::Bisect(r) => r.as_ref().err(),
+            Reply::BisectRefused(_, f) => Some(f),
         };
         if failed.is_some_and(|f| f.down) {
             client = None;
@@ -160,4 +214,24 @@ async fn serve(requests: async_channel::Receiver<Request>, replies: async_channe
             return; // the window is gone
         }
     }
+}
+
+/// After a bisect action: its refusal, if it was refused, then the session as it is now.
+async fn bisect_action(
+    c: &Client,
+    replies: &async_channel::Sender<Reply>,
+    what: &str,
+    result: Result<(), ClientError>,
+) -> Reply {
+    if let Err(e) = result {
+        let _ = replies
+            .send(Reply::BisectRefused(what.to_owned(), Failure::from(e)))
+            .await;
+    }
+    Reply::Bisect(
+        c.bisect_status()
+            .await
+            .map(|s| s.map(Box::new))
+            .map_err(Failure::from),
+    )
 }

@@ -13,6 +13,7 @@ name = "osreflog-app"
 path = "src/main.rs"
 
 [dependencies]
+osreflog-bisect.workspace = true
 osreflog-client.workspace = true
 osreflog-model.workspace = true
 osreflog-undo.workspace = true
