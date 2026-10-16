@@ -19,6 +19,25 @@ pub enum TierArg {
     Vm,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ManualTier {
+    /// A container on the copy, entered with machinectl shell.
+    Nspawn,
+    /// A reboot of this machine into the copy, once.
+    Metal,
+}
+
+/// Whether to reboot when a metal probe is armed (or, inside a probe, once the verdict is in).
+#[derive(Clone, Copy, clap::Args)]
+pub struct RebootOpts {
+    /// Reboot without asking.
+    #[arg(long, conflicts_with = "no_reboot")]
+    yes: bool,
+    /// Don't reboot and don't ask: reboot yourself when ready.
+    #[arg(long)]
+    no_reboot: bool,
+}
+
 #[derive(Subcommand)]
 pub enum BisectCmd {
     /// Find the first cause after which a test fails, between two checkpoints. The test runs
@@ -61,13 +80,34 @@ pub enum BisectCmd {
         /// A checkpoint where they don't; default the newest.
         #[arg(long, default_value = "@{0}")]
         bad: String,
+        /// nspawn: each probe is a container you enter. metal: each probe is one reboot of
+        /// this machine into the copy (hardware, firmware, GPU, Wi-Fi); the boot after it is
+        /// your normal system again.
+        #[arg(long, value_enum, default_value = "nspawn")]
+        tier: ManualTier,
+        #[command(flatten)]
+        reboot: RebootOpts,
     },
     /// The probe that waits is good (run it on the host, or as root inside the probe).
-    Good,
+    Good {
+        #[command(flatten)]
+        reboot: RebootOpts,
+    },
     /// The probe that waits is bad.
-    Bad,
+    Bad {
+        #[command(flatten)]
+        reboot: RebootOpts,
+    },
     /// The probe that waits can't be judged.
-    Skip,
+    Skip {
+        #[command(flatten)]
+        reboot: RebootOpts,
+    },
+    /// Arm the waiting metal probe again (it didn't boot, or came back without a verdict).
+    Rearm {
+        #[command(flatten)]
+        reboot: RebootOpts,
+    },
     /// Every probe so far and its verdict.
     Log,
     /// The current or last bisect.
@@ -177,11 +217,69 @@ const PROBE_VERDICT: &str = "/var/lib/osreflog-probe/verdict";
 
 fn verdict_word(cmd: &BisectCmd) -> Option<&'static str> {
     match cmd {
-        BisectCmd::Good => Some("good"),
-        BisectCmd::Bad => Some("bad"),
-        BisectCmd::Skip => Some("skip"),
+        BisectCmd::Good { .. } => Some("good"),
+        BisectCmd::Bad { .. } => Some("bad"),
+        BisectCmd::Skip { .. } => Some("skip"),
         _ => None,
     }
+}
+
+fn reboot_opts(cmd: &BisectCmd) -> Option<RebootOpts> {
+    match cmd {
+        BisectCmd::Good { reboot }
+        | BisectCmd::Bad { reboot }
+        | BisectCmd::Skip { reboot }
+        | BisectCmd::Rearm { reboot }
+        | BisectCmd::Start { reboot, .. } => Some(*reboot),
+        _ => None,
+    }
+}
+
+/// Reboots when asked to (`--yes`), asks on a terminal, or says how.
+fn maybe_reboot(opts: RebootOpts, question: &str) -> anyhow::Result<()> {
+    use std::io::{BufRead as _, IsTerminal as _, Write as _};
+    if opts.no_reboot {
+        println!("reboot when you're ready:  systemctl reboot");
+        return Ok(());
+    }
+    let go = opts.yes || {
+        if !std::io::stdin().is_terminal() {
+            println!("reboot when you're ready:  systemctl reboot");
+            return Ok(());
+        }
+        print!("{question} [y/N] ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        matches!(line.trim(), "y" | "Y" | "yes")
+    };
+    if go {
+        println!("rebooting…");
+        let status = std::process::Command::new("systemctl")
+            .arg("reboot")
+            .status()?;
+        if !status.success() {
+            bail!("systemctl reboot failed ({status})");
+        }
+    } else {
+        println!("reboot when you're ready:  systemctl reboot");
+    }
+    Ok(())
+}
+
+/// After following a session: a metal probe that waits for its reboot gets one, if wanted.
+async fn offer_reboot(p: &OsreflogProxy<'_>, opts: RebootOpts) -> anyhow::Result<()> {
+    let raw = p.bisect_status().await.map_err(crate::explain)?;
+    if let Some(Status {
+        waiting: Some(w),
+        running: true,
+        ..
+    }) = serde_json::from_str::<Option<Status>>(&raw)?
+        && w.reboot
+    {
+        maybe_reboot(opts, &format!("Reboot now into probe {}?", w.probe))?;
+    }
+    Ok(())
 }
 
 /// Whether this is a verdict given inside a probe.
@@ -211,7 +309,10 @@ pub fn verdict_here(cmd: &BisectCmd) -> anyhow::Result<ExitCode> {
     if std::path::Path::new("/run/systemd/container").exists() {
         println!("osreflog stops this container and goes on with the next probe in a moment.");
     } else {
-        println!("Reboot to go back to your normal system; osreflog goes on from there.");
+        println!("Rebooting goes back to your normal system; osreflog goes on from there.");
+        if let Some(opts) = reboot_opts(cmd) {
+            maybe_reboot(opts, "Reboot now to your normal system?")?;
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -373,11 +474,19 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
             }
             Ok(ExitCode::SUCCESS)
         }
-        BisectCmd::Start { good, bad } => {
+        BisectCmd::Start {
+            good,
+            bad,
+            tier,
+            reboot,
+        } => {
             let args = Args {
                 good: crate::time::expand_ref(&good),
                 bad: crate::time::expand_ref(&bad),
-                tier: Tier::Nspawn,
+                tier: match tier {
+                    ManualTier::Nspawn => Tier::Nspawn,
+                    ManualTier::Metal => Tier::Metal,
+                },
                 boot: true,
                 test: String::new(),
                 timeout_s: None,
@@ -386,14 +495,44 @@ pub async fn run(p: &OsreflogProxy<'_>, cmd: BisectCmd) -> anyhow::Result<ExitCo
             p.bisect_run(&serde_json::to_string(&args)?)
                 .await
                 .map_err(crate::explain)?;
-            follow(p, None).await
+            let code = follow(p, None).await?;
+            offer_reboot(p, reboot).await?;
+            Ok(code)
         }
-        BisectCmd::Good | BisectCmd::Bad | BisectCmd::Skip => {
+        BisectCmd::Good { reboot } | BisectCmd::Bad { reboot } | BisectCmd::Skip { reboot } => {
             let word = verdict_word(&cmd).unwrap_or("skip");
             let raw = p.bisect_verdict(word).await.map_err(crate::explain)?;
             let before: Option<Status> = serde_json::from_str(&raw)?;
             let after = before.and_then(|s| s.waiting.map(|w| w.probe));
-            follow(p, after).await
+            let code = follow(p, after).await?;
+            offer_reboot(p, reboot).await?;
+            Ok(code)
+        }
+        BisectCmd::Rearm { reboot } => {
+            let raw = p.bisect_rearm().await.map_err(crate::explain)?;
+            let before = serde_json::from_str::<Option<Status>>(&raw)?.map_or(0, |s| s.log.len());
+            // The session's thread arms it within seconds (longer when an initramfs is built).
+            let mut armed = false;
+            'wait: for _ in 0..240 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let raw = p.bisect_status().await.map_err(crate::explain)?;
+                let Some(s) = serde_json::from_str::<Option<Status>>(&raw)? else {
+                    break;
+                };
+                for line in s.log.iter().skip(before) {
+                    if line.contains("armed again") || line.starts_with("rearming") {
+                        println!("{line}");
+                        armed = line.contains("armed again");
+                        break 'wait;
+                    }
+                }
+            }
+            if armed {
+                offer_reboot(p, reboot).await?;
+                Ok(ExitCode::SUCCESS)
+            } else {
+                Ok(ExitCode::FAILURE)
+            }
         }
         BisectCmd::Log => {
             let raw = p.bisect_status().await.map_err(crate::explain)?;

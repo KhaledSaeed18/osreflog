@@ -37,6 +37,7 @@ pub(crate) trait Osreflog {
     fn bisect_status(&self) -> zbus::Result<String>;
     fn bisect_reset(&self) -> zbus::Result<String>;
     fn bisect_verdict(&self, verdict: &str) -> zbus::Result<String>;
+    fn bisect_rearm(&self) -> zbus::Result<String>;
 }
 
 /// How long the dnf hook waits for the daemon before giving up (and letting dnf continue).
