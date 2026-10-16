@@ -9,7 +9,7 @@ ConditionKernelCommandLine=!osreflog.probe
 ConditionPathExists=!/var/lib/osreflog-probe/manual
 
 [Service]
-ExecStart=/usr/local/libexec/osreflog/osreflog-user
+ExecStart=/usr/libexec/osreflog/osreflog-user
 Restart=on-failure
 RestartSec=5
 Nice=5

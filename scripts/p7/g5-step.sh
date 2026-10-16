@@ -116,6 +116,8 @@ case "$stage" in
     L=/usr/local/libexec/osreflog
     cp /usr/local/bin/osreflogd "$L/.osreflogd.new" && mv "$L/.osreflogd.new" "$L/osreflogd"
     install -m 0644 /usr/local/bin/osreflog-boot-doctor.service /etc/systemd/system/
+    # data/ names the packaged paths; this build lives in /usr/local in the VM.
+    sed -i 's|/usr/libexec/osreflog/|/usr/local/libexec/osreflog/|g' /etc/systemd/system/osreflog*.service
     restorecon "$L/osreflogd" /etc/systemd/system/osreflog-boot-doctor.service
     systemctl daemon-reload && systemctl enable -q osreflog-boot-doctor.service || fail "enable the doctor"
     make_probe 1

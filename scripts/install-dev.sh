@@ -20,6 +20,17 @@ DBUS=/etc/dbus-1/system.d/io.github.khaledsaeed18.osreflog1.conf
 POLKIT=/usr/share/polkit-1/actions/io.github.khaledsaeed18.osreflog.policy
 ACTIONS=/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions
 
+# The files in data/ name the packaged paths (/usr/libexec, /usr/bin); a development install
+# lives in /usr/local.
+local_paths() {
+    sed -e 's|/usr/libexec/osreflog/|/usr/local/libexec/osreflog/|g' \
+        -e 's|/usr/bin/osreflog |/usr/local/bin/osreflog |g' "$1"
+}
+
+install_local() { # SOURCE DEST
+    local_paths "$1" >"$2.tmp" && chmod 0644 "$2.tmp" && mv "$2.tmp" "$2"
+}
+
 reload_bus() {
     systemctl reload dbus-broker.service 2>/dev/null || systemctl reload dbus.service 2>/dev/null || true
 }
@@ -49,10 +60,10 @@ install -d -m 0755 "$LIBEXEC"
 install -m 0755 "$REPO/target/release/osreflogd" "$LIBEXEC/osreflogd"
 install -m 0755 "$REPO/target/release/osreflog-user" "$LIBEXEC/osreflog-user"
 install -m 0755 "$REPO/target/release/osreflog" "$BIN"
-install -m 0644 "$REPO/data/systemd/osreflogd.service" "$UNIT"
-install -m 0644 "$REPO/data/systemd/osreflog-boot-doctor.service" "$BOOT_UNIT"
+install_local "$REPO/data/systemd/osreflogd.service" "$UNIT"
+install_local "$REPO/data/systemd/osreflog-boot-doctor.service" "$BOOT_UNIT"
 install -d -m 0755 "$(dirname "$USER_UNIT")"
-install -m 0644 "$REPO/data/systemd/osreflog-user.service" "$USER_UNIT"
+install_local "$REPO/data/systemd/osreflog-user.service" "$USER_UNIT"
 install -m 0644 "$REPO/data/dbus/io.github.khaledsaeed18.osreflog1.conf" "$DBUS"
 install -m 0644 "$REPO/data/polkit/io.github.khaledsaeed18.osreflog.policy" "$POLKIT"
 restorecon -R "$LIBEXEC" "$BIN" "$UNIT" "$BOOT_UNIT" "$USER_UNIT" "$DBUS" "$POLKIT" 2>/dev/null || true
@@ -64,7 +75,7 @@ systemctl enable osreflogd.service
 systemctl enable osreflog-boot-doctor.service
 systemctl restart osreflogd.service
 # The hook goes in last: from here on every dnf transaction is bracketed by checkpoints.
-install -m 0644 "$REPO/data/dnf/osreflog.actions" "$ACTIONS"
+install_local "$REPO/data/dnf/osreflog.actions" "$ACTIONS"
 restorecon "$ACTIONS" 2>/dev/null || true
 systemctl --no-pager --lines=5 status osreflogd.service || true
 echo "osreflog installed. Try: osreflog doctor; osreflog log"

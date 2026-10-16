@@ -51,6 +51,8 @@ if [ ! -e "$S/started" ]; then
     cp /usr/local/bin/osreflogd "$L/.osreflogd.new" && mv "$L/.osreflogd.new" "$L/osreflogd"
     # flow put this build's CLI at /usr/local/bin/osreflog already, and the unit files next to it.
     install -m 0644 /usr/local/bin/osreflogd.service /usr/local/bin/osreflog-boot-doctor.service /etc/systemd/system/
+    # data/ names the packaged paths; this build lives in /usr/local in the VM.
+    sed -i 's|/usr/libexec/osreflog/|/usr/local/libexec/osreflog/|g' /etc/systemd/system/osreflog*.service
     restorecon "$L/osreflogd" /usr/local/bin/osreflog /etc/systemd/system/osreflogd.service /etc/systemd/system/osreflog-boot-doctor.service
     systemctl daemon-reload
     systemctl enable -q osreflog-boot-doctor.service

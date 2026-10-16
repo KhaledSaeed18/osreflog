@@ -15,7 +15,7 @@ ConditionPathExists=!/var/lib/osreflog-probe/manual
 [Service]
 Type=dbus
 BusName=io.github.khaledsaeed18.osreflog1
-ExecStart=/usr/local/libexec/osreflog/osreflogd
+ExecStart=/usr/libexec/osreflog/osreflogd
 # The btrfs top level is mounted at /run/osreflog/top in this namespace only; osreflogd
 # refuses to run in PID 1's mount namespace.
 PrivateMounts=yes

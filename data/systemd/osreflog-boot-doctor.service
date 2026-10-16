@@ -8,7 +8,7 @@ Before=osreflogd.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/osreflog/osreflogd --boot-doctor
+ExecStart=/usr/libexec/osreflog/osreflogd --boot-doctor
 # The btrfs top level is mounted under /run/osreflog-boot-doctor in this namespace only.
 PrivateMounts=yes
 RuntimeDirectory=osreflog-boot-doctor
