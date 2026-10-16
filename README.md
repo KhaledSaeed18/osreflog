@@ -31,7 +31,16 @@ files (2):
 
 `osreflog log` lists checkpoints with what changed since the one before. `osreflog diff` with no range shows what changed since the newest checkpoint. References work the way git's reflog does: `c42`, `@{1}`, `@{now}`, `@{boot-1}`, `@{yesterday}`. Measured on this laptop: the cached diff takes 6 ms, osreflog adds under a second to a dnf transaction, and the idle daemon uses 0.0 % CPU and 26 MB of RAM ([P2 journal](docs/journal/p2-slice.md)).
 
-Development install (Fedora on btrfs):
+Install (Fedora 44 on btrfs, x86_64) from [COPR](https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/):
+
+```
+sudo dnf copr enable khaledsaeed18/osreflog
+sudo dnf install osreflog osreflog-app
+sudo systemctl enable --now osreflogd.service osreflog-boot-doctor.service
+osreflog doctor
+```
+
+Development install:
 
 ```
 cargo build --release
