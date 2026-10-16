@@ -220,3 +220,14 @@ Everything here is unit-tested; nothing ran as root, so nothing ran in the VM or
 
    Each boot of the VM took 21–24 s to `running`.
 2. **P7a again on the laptop** with this build: **found #625** in 3 probes, across an osreflogd restart, no container left. The 3 s pause before stopping a container works (a verdict given on the host went through cleanly); the test script's own `systemd-run -M` still prints "Connection reset by peer" when the container it ran the verdict in shuts down, which is the script's connection, not the verdict's.
+3. **The P6 seeded suite** (`scripts/p6/seeded.sh`), since `bisect run` now drives the shared `TwoLevel` search: **5/5**, each culprit found within the bound, as in P6.
+
+   | Scenario | Probes | Causes | Slowest probe |
+   | -------- | ------ | ------ | ------------- |
+   | config (4 checkpoints) | 5 | 3 | 0.4 s |
+   | unit | 3 | 4 | 0.4 s |
+   | sysctl | 3 | 4 | 0.3 s |
+   | package | 4 | 1 | 0.4 s |
+   | module (vm) | 3 | 3 | 20.8 s, qemu 428 MiB |
+
+   VM probes took 14.9–20.8 s against P6's 12.7–14.0 s, with about 1.7 GiB free on the host: still inside P6's 30 s bound.
