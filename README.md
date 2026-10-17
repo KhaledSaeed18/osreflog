@@ -146,7 +146,7 @@ Built on btrfs, fanotify, eBPF (aya), dnf5/RPM, systemd, KVM/QEMU with virtiofs,
 
 ## Measured
 
-On the development laptop (Fedora 44, i7-8550U, SATA SSD), from the [phase journals](docs/journal/):
+On the development laptop (Fedora 44, i7-8550U, SATA disk). Every number has a script that measures it again: see [Validation](docs/validation.md), with what isn't validated yet.
 
 | | |
 |---|---|

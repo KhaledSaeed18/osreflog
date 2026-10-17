@@ -18,6 +18,7 @@
 | 7 | [roadmap.md](./roadmap.md) | Phases P0–P8, the write gate and the boot gate |
 | 8 | [environment.md](./environment.md) | This host's facts and expected friction |
 | 9 | [open-questions.md](./open-questions.md) | Open questions with the phase that answers each, and resolved ones |
+| 10 | [validation.md](./validation.md) | Every claim, the check behind it, its last result and the command to run it again |
 
 ## Folders
 

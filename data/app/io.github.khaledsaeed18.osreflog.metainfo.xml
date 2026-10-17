@@ -61,6 +61,11 @@
   </branding>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-10-17">
+      <description>
+        <p>A friendlier app: the open item is marked in the sidebar, causes can be searched, pages open with a clear header, line diffs are colored, loading is animated, and actions confirm themselves with a notification.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-16">
       <description>
         <p>First release: the history browser, what changed since a checkpoint, undo with a preview, and the bisect wizard.</p>

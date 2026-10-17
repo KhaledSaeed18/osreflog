@@ -1,7 +1,7 @@
 %global app_id io.github.khaledsaeed18.osreflog
 
 Name:           osreflog
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        System change history for Fedora: what changed, what changed it, and undo
 
@@ -138,6 +138,11 @@ cargo test --release --frozen --offline --workspace --exclude osreflog-fuzz
 %{_datadir}/icons/hicolor/symbolic/apps/%{app_id}-symbolic.svg
 
 %changelog
+* Sat Oct 17 2026 Khaled Saeed <khaled18saeed@gmail.com> - 0.2.0-1
+- The app: the open row marked, search, page headers, colored line diffs, animated loading,
+  toasts, keyboard shortcuts; needs libadwaita 1.6
+- Screenshots in the AppStream metainfo
+
 * Fri Oct 16 2026 Khaled Saeed <khaled18saeed@gmail.com> - 0.1.0-1
 - First release: checkpoints around every dnf transaction and on a schedule, changes tied to
   what made them, undo with a preview, bisect in containers, VMs and real boots, and the app
