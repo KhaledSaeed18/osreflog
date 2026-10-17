@@ -51,7 +51,7 @@ The whole read-only path, with no live capture yet.
 - `capture` crate: one fanotify filesystem mark, scope filtering in userspace, resolution by dir handle (`open_by_handle_at`), PIDFD; re-measure event rates under heavy browser load
 - `lineage` + `lineage-ebpf` (aya): fork/exec/exit ring buffer, pid+starttime cache with grace period
 - Cause builder rules (dnf bracket, unit, session/command, unknown); quiet-period closing
-- Blob store (BLAKE3 + zstd) with secrets denylist and argv redaction
+- Blob store (BLAKE3 + deflate; zstd was the plan) with secrets denylist and argv redaction
 - Reconciliation at each checkpoint: confirmed / `offline` / transient; gap records
 - `osreflog why <path>`, `show #id`, `blame <path>` (line → cause, for text configs)
 - testbed: scripted scenarios in a VM (`sed -i`, `systemctl enable`, `dnf install`, `nmcli` change, editor save-by-rename) with expected causes

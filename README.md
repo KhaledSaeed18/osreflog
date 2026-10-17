@@ -125,19 +125,10 @@ osreflog writes to your system only when you ask it to undo something, and it bo
 
 ## How it works
 
-```
-                  ┌────────────────────── osreflogd (root, Rust) ──────────────────────┐
- live witness ──► │ fanotify (fs-wide mark) + eBPF exec/fork lineage ──► cause builder │
-                  │ dnf5 actions hook · dnf5 history · systemd units · D-Bus callers   │
-                  │                              │                                     │
- state witness ─► │ btrfs checkpoints (read-only snapshots) ──► send-stream diff       │
-                  │                              ▼                                     │
-                  │        ledger (SQLite, hash-chained) + content blobs (zstd)         │
-                  └────────┬──────────────────────┬──────────────────────┬─────────────┘
-                           │ D-Bus + polkit       │                      │
-                     CLI · GNOME app        undo (3-way,           bisect probes:
-                                            checkpoint first)      nspawn · KVM · metal
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-dark.svg">
+  <img alt="Two witnesses feed osreflogd. The live witness (fanotify and eBPF) records who changed each file; the state witness (btrfs snapshots and their send stream) proves what changed. osreflogd groups changes into causes in a hash-chained ledger and serves reading (CLI and app over D-Bus and polkit), undo (a dry run first, a checkpoint, conflicts left alone) and bisect (containers, VMs, real boots)." src="docs/images/how-it-works-light.svg">
+</picture>
 
 - **Two witnesses.** The live witness records *who* changed each file as it happens: fanotify sees the write, eBPF traces the process back to its command, service or package transaction. The state witness proves *what* changed, from the stream `btrfs send --no-data` produces between two snapshots. When they disagree (a change made while the daemon was stopped), that is reported, not hidden.
 - **Causes, not files.** Changes are grouped into causes: a dnf transaction, a systemd unit, a terminal command, an app writing a setting, a daemon acting for the D-Bus caller who asked it. You read, undo and bisect whole causes.

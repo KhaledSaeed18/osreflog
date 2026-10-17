@@ -66,7 +66,7 @@ Rules, in priority order, applied to the actor's lineage (nearest ancestor wins)
 On `FAN_CLOSE_WRITE` or `FAN_MOVED_TO` for an in-scope regular file:
 
 1. Open it with `openat2(dirfd, name, RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH)`, where `dirfd` comes from the event's directory handle (`open_by_handle_at`). Never follow a path string.
-2. If it's < 1 MiB, looks like text, and isn't on the secrets denylist → zstd blob, BLAKE3 id. Otherwise store size + hash + mode only.
+2. If it's < 1 MiB, looks like text, and isn't on the secrets denylist → deflate-compressed blob, BLAKE3 id. Otherwise store size + hash + mode only.
 3. The "before" content is the previous blob for that path, or for the first sighting, the file as it is in the latest checkpoint (read through the private top-level mount).
 
 A file can change again before we read it. The blob is then the *later* content. That's accepted and flagged (`raced=true`), because the state witness has the final truth.

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" role="img" aria-label="Two witnesses feed osreflogd: the live witness records who changed each file, the state witness proves what changed between btrfs snapshots. osreflogd groups changes into causes in a hash-chained ledger, and serves reading (CLI and app), undo and bisect.">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6e7681"/></marker></defs>
+<rect x="20" y="40" width="250" height="150" rx="12" fill="#132235" stroke="#6ca4e6" stroke-width="1.5"/>
+<text x="36" y="68" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#6ca4e6">Live witness: who</text>
+<text x="36" y="92" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">fanotify sees every write</text>
+<text x="36" y="112" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">eBPF traces the process to its</text>
+<text x="36" y="132" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">command, unit or dnf transaction</text>
+<text x="36" y="152" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">D-Bus: the caller who asked</text>
+<rect x="20" y="240" width="250" height="150" rx="12" fill="#132235" stroke="#6ca4e6" stroke-width="1.5"/>
+<text x="36" y="268" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#6ca4e6">State witness: what</text>
+<text x="36" y="292" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">read-only btrfs snapshots</text>
+<text x="36" y="312" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">around every dnf transaction,</text>
+<text x="36" y="332" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">at boot, daily, on request;</text>
+<text x="36" y="352" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">diffed from the send stream</text>
+<rect x="340" y="40" width="280" height="350" rx="12" fill="#2b1d12" stroke="#f0883e" stroke-width="1.5"/>
+<text x="356" y="68" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#f0883e">osreflogd</text>
+<rect x="360" y="90" width="240" height="116" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+<text x="376" y="118" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#e6edf3">Causes</text>
+<text x="376" y="142" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">changes grouped by what</text>
+<text x="376" y="162" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">made them: a package, a unit,</text>
+<text x="376" y="182" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">a command, an app</text>
+<rect x="360" y="228" width="240" height="140" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+<text x="376" y="256" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#e6edf3">Ledger</text>
+<text x="376" y="280" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">SQLite, hash-chained</text>
+<text x="376" y="300" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">content of changed configs</text>
+<text x="376" y="320" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">(never secrets), compressed,</text>
+<text x="376" y="340" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">the attic undo keeps</text>
+<line x1="480" y1="206" x2="480" y2="226" stroke="#6e7681" stroke-width="1.75" marker-end="url(#head)"/>
+<line x1="270" y1="115" x2="356" y2="140" stroke="#6e7681" stroke-width="1.75" marker-end="url(#head)"/>
+<line x1="270" y1="315" x2="356" y2="290" stroke="#6e7681" stroke-width="1.75" marker-end="url(#head)"/>
+<text x="145" y="212" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="12" fill="#9198a1" text-anchor="middle">the two must agree;</text>
+<text x="145" y="228" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="12" fill="#9198a1" text-anchor="middle">a gap between them is reported</text>
+<rect x="690" y="40" width="250" height="104" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+<text x="706" y="68" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#e6edf3">Read</text>
+<text x="706" y="92" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">log · diff · why · show</text>
+<text x="706" y="112" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">CLI and GNOME app, D-Bus + polkit</text>
+<rect x="690" y="163" width="250" height="104" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+<text x="706" y="191" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#e6edf3">Undo</text>
+<text x="706" y="215" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">a dry run first, a checkpoint,</text>
+<text x="706" y="235" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">conflicts left alone</text>
+<rect x="690" y="286" width="250" height="104" rx="12" fill="#151b23" stroke="#3d444d" stroke-width="1.5"/>
+<text x="706" y="314" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="16" font-weight="700" fill="#e6edf3">Bisect</text>
+<text x="706" y="338" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">down to one cause, in copies:</text>
+<text x="706" y="358" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="13" fill="#9198a1">containers · VMs · real boots</text>
+<line x1="620" y1="150" x2="686" y2="92" stroke="#6e7681" stroke-width="1.75" marker-end="url(#head)"/>
+<line x1="620" y1="215" x2="686" y2="215" stroke="#6e7681" stroke-width="1.75" marker-end="url(#head)"/>
+<line x1="620" y1="280" x2="686" y2="338" stroke="#6e7681" stroke-width="1.75" marker-end="url(#head)"/>
+<text x="480.0" y="426" font-family="-apple-system,'Segoe UI',Cantarell,'Noto Sans',sans-serif" font-size="12" fill="#9198a1" text-anchor="middle">Root, sandboxed by systemd; the CLI and the app only ever ask it over D-Bus.</text>
+</svg>

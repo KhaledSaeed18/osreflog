@@ -61,7 +61,7 @@ Refs use git's reflog syntax:
                                                              ▼
                                          open cause (actor, kind), append change
                                                              │
-                     on close-write: read file (O_NOFOLLOW) → blob store (zstd, BLAKE3)
+                     on close-write: read file (O_NOFOLLOW) → blob store (deflate, BLAKE3)
                                                              │
                      on cause close: ledger commit (one SQLite txn, hash-chain entry)
                                                              │
@@ -87,7 +87,7 @@ btrfs top level (subvolid=5, never mounted in the user's namespace)
 
 - `osreflogd` mounts the top level **privately in its own mount namespace** (`MountFlags=` / `PrivateMounts=` in the unit), so snapshots never show up in the user's `/`, `locate` or backup tools ([ADR 0004](./decisions/0004-snapshot-layout.md)).
 - `/boot` config (BLS entries, `grubenv`, `grub.cfg`) is tracked as content blobs in the ledger, because snapshots can't cover it. Kernel images are package-owned and come back through dnf.
-- Blob store: content-addressed by BLAKE3 and zstd-compressed. Only for text-like config files under live-capture scopes, < 1 MiB, and not on the secrets denylist ([threat-model.md](./threat-model.md)).
+- Blob store: content-addressed by BLAKE3 and deflate-compressed (P3 chose deflate over the planned zstd: no C build; the format records its codec). Only for text-like config files under live-capture scopes, < 1 MiB, and not on the secrets denylist ([threat-model.md](./threat-model.md)).
 
 Checkpoint cost (P1): 53–173 ms on an idle system, 0.4–0.9 s from the dnf pre-transaction hook, and **5.3 s right after a 435 MiB transaction**, because btrfs flushes the transaction's dirty data first. The post-transaction checkpoint runs after rpm has finished, so it delays dnf's exit but never the package writes.
 
