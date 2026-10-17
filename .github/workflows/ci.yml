@@ -75,7 +75,10 @@ jobs:
         run: |
           systemd-analyze security --offline=yes --threshold=24 data/systemd/osreflogd.service
           systemd-analyze security --offline=yes --threshold=22 data/systemd/osreflog-boot-doctor.service
-          systemd-analyze security --offline=yes --user --threshold=10 data/systemd/osreflog-user.service
+          # A user manager needs a runtime directory, which a container has none of.
+          mkdir -m 0700 -p /tmp/xdg
+          XDG_RUNTIME_DIR=/tmp/xdg systemd-analyze security --offline=yes --user --threshold=10 \
+            data/systemd/osreflog-user.service
       - name: The SELinux module compiles
         working-directory: data/selinux
         run: make -f /usr/share/selinux/devel/Makefile osreflog.pp
