@@ -21,6 +21,7 @@
 | 10 | [validation.md](./validation.md) | Every claim, the check behind it, its last result and the command to run it again |
 | 11 | [install.md](./install.md) | Requirements, COPR, release RPMs, from source, removing it and its history |
 | 12 | [troubleshooting.md](./troubleshooting.md) | Symptoms, why they happen, what to do |
+| 13 | [performance.md](./performance.md) | What osreflog costs: at rest, around a transaction, under load, bisect probes, disk, over days |
 
 ## Folders
 

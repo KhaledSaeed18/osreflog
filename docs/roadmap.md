@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: **P8 (GNOME app, packaging, hardening) in progress: P8a (the history browser), P8b ("what changed since…"), P8c (undo with the preview), P8d (the bisect wizard) and P8e (RPM packaging, in COPR) done.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed and P7 closed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
+Status: **P8 (GNOME app, packaging, hardening) in progress: P8a (the history browser), P8b ("what changed since…"), P8c (undo with the preview), P8d (the bisect wizard), P8e (RPM packaging, in COPR) and P8f (hardening: system call filters, the user agent sandboxed, SELinux types for the ledger) done; 0.2.0 released.** P0 closed 2026-10-14; P1 to P6 and the write gate closed 2026-10-15; the boot gate passed and P7 closed 2026-10-16. Each phase ends with a written note in `docs/journal/` (created when Phase 1 starts): what worked, what broke, and what changed in the design.
 
 The order is deliberate: **measure before designing in stone, read-only before writing, VM before metal, the GUI last.**
 
@@ -108,9 +108,9 @@ Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
 **Exit:** one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end. **Met** ([journal](./journal/p7-metal.md)): NetworkManager's Wi-Fi power save switched on by one of three causes, found (#680) in 3 metal probes, 6 reboots, the default entry untouched throughout.
 
 ## P8: GNOME app, packaging, hardening
-- GTK4/libadwaita app: timeline of causes, cause detail with semantic diffs, "what changed since…" picker, bisect wizard (nspawn/vm), undo with dry-run preview
-- SELinux policy module; systemd hardening audit (`systemd-analyze security`)
-- COPR packaging (like drainscope), RPM with the dnf actions file, units, polkit, D-Bus config
-- Docs: user guide, design write-up, the "what changes in a month" research note
+- [x] SELinux policy module (types for the ledger and runtime files; a worker domain later); systemd hardening audit (`systemd-analyze security`, held by CI)
+- [x] COPR packaging (Fedora 44, 45, rawhide), RPM with the dnf actions file, units, polkit, D-Bus config; GitHub releases built by CI
+- [x] Docs: [install](./install.md), [troubleshooting](./troubleshooting.md), [validation](./validation.md), [performance](./performance.md); the "what changes in a month" research note still to come
+- [x] GTK4/libadwaita app (P8a–P8d)
 
 **Exit:** installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.

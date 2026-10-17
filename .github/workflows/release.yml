@@ -68,7 +68,9 @@ jobs:
         run: |
           git config --global --add safe.directory "*"
           mkdir assets
-          cp src/target/dist/*.tar.gz src/target/dist/rpmbuild/SRPMS/*.rpm src/target/dist/rpmbuild/RPMS/*/*.rpm assets/
+          cp src/target/dist/*.tar.gz src/target/dist/rpmbuild/SRPMS/*.rpm assets/
+          # The packages people install; debuginfo and debugsource stay out (COPR has them).
+          find src/target/dist/rpmbuild/RPMS -name '*.rpm' ! -name '*-debug*' -exec cp {} assets/ \;
           (cd assets && sha256sum * >SHA256SUMS)
           ls -l assets
           cd src

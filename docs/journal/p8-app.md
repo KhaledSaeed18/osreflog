@@ -141,3 +141,21 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - **Screenshots** from this laptop's real history, reproducible: `scripts/screenshots.sh` runs the app on an off-screen Broadway display with `OSREFLOG_APP_SCREENSHOT` (render the window to a PNG at 2×, then quit) and `ADW_DEBUG_COLOR_SCHEME` for light and dark. `OSREFLOG_APP_OPEN` takes several items now (`search:p8c,cause:774`). Animations are off in that mode: with no browser attached Broadway's frame clock doesn't run, and the first capture stayed on the fading loading page. The metainfo lists the screenshots (GNOME Software shows them).
 - **Found while capturing:** line diffs in previews were plain text; removed lines are red, added lines green and hunk headers dimmed now (`view::line_tone`), and a probe's verdict icon is green or red.
 - **Found while measuring:** the daemon at rest uses 0.08 % of one CPU (5 ticks in 60 s), but holds 108 MB of anonymous memory after a day with several large diffs (P2 measured 26 MB before the live witness and the app). That goes to the performance work: what holds it, and whether it comes back.
+
+### 2026-10-17: P8f, hardening
+
+- **System call filters.** `osreflogd` and the boot doctor refuse `@clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap` with `EPERM`. An allow-list (`@system-service`) is too narrow for a daemon that mounts, sets owners and capabilities, and sets its workers' rlimits; the undo and summary workers keep their own allow-list filter and Landlock on top. `@debug` is safe to refuse because the lineage program attaches through `bpf()` links (`tp_btf`), not perf events. Exposure: osreflogd 3.6 → **2.4**, the boot doctor 4.2 → **2.2**.
+- **`UMask=` left out** for the daemon: the undo engine creates intermediate directories with a fixed 0755 and restores modes explicitly only on files, so a umask could leave a restored directory 0700. Worth doing once the write gate has a case for it.
+- **The user agent sandboxed**, tested as a user drop-in before it went into `data/`: read-only system and home except `~/.local/state/osreflog`, private /tmp and devices, no network, no capabilities, `@system-service` minus `@privileged @resources`, `UMask=0077`. In a user unit these imply `PrivateUsers=yes`; reading your own processes' `/proc` still works. `scripts/p4/user-workload.sh`: **8/8**. Exposure 8.0 → **1.0** (offline; 0.8 for the running unit). `IPAddressDeny=` came out again: a user manager can't apply it.
+- **`MALLOC_ARENA_MAX=2`** in osreflogd's unit, for the 108 MB found earlier today: a hypothesis (glibc's per-thread arenas on the blocking pool) until measured.
+- **`osreflog-selinux`** (`data/selinux/`): types for the ledger, blobs and attic (`osreflog_var_lib_t`) and the runtime directories (`osreflog_runtime_t`), so confined services can't read them, and `osreflog_read_lib_files()` for a policy that needs to. The daemon stays `unconfined_service_t`: a domain for a process that reads every file and, on undo, writes any of them would mostly be a label. A narrow domain for the undo and summary workers (one writes, one parses untrusted content) is the meaningful next step. The module compiles here and in CI; the spec installs it with Fedora's `%selinux_modules_install` and relabels.
+- **CI**'s ratchet now holds the new scores, the user unit included, and compiles the module.
+
+**Runbook (root, on the laptop):**
+
+```bash
+cargo build --release && cargo test --release -p osreflog-undo --no-run
+sudo scripts/p8/hardening-check.sh 2>&1 | tee perf-out/hardening-check.log
+```
+
+It installs the build, then runs the doctor, the P3 testbed (capture and lineage under the filter), the P5 write gate and live undo, the P6 seeded bisect (containers and a VM), the boot doctor, the daemon's memory around two large diffs, and lists anything the filter refused. Afterwards, the SELinux module from the release RPM: `sudo dnf install ./osreflog-selinux-0.2.0-1.fc44.noarch.rpm`, then `ls -Z /var/lib/osreflog` should show `osreflog_var_lib_t`, and the testbed again.
