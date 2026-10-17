@@ -34,7 +34,8 @@ step "units carry the hardening" bash -c '
     systemctl show osreflogd -p SystemCallFilter | grep -q "SystemCallFilter=." &&
     systemctl show osreflogd -p Environment | grep -q MALLOC_ARENA_MAX=2'
 step "doctor" osreflog doctor
-step "P3 testbed (capture and lineage)" scripts/p3/testbed.sh
+# Its causes are labeled with this script's command line (the session's top command).
+step "P3 testbed (capture and lineage)" env OSREFLOG_CHECK_PARENT=hardening-check scripts/p3/testbed.sh
 step "P5 write gate" scripts/p5/gate.sh
 step "P5 live undo" scripts/p5/undo-workload.sh
 step "P6 seeded bisect" scripts/p6/seeded.sh

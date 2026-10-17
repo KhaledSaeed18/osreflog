@@ -159,3 +159,10 @@ sudo scripts/p8/hardening-check.sh 2>&1 | tee perf-out/hardening-check.log
 ```
 
 It installs the build, then runs the doctor, the P3 testbed (capture and lineage under the filter), the P5 write gate and live undo, the P6 seeded bisect (containers and a VM), the boot doctor, the daemon's memory around two large diffs, and lists anything the filter refused. Afterwards, the SELinux module from the release RPM: `sudo dnf install ./osreflog-selinux-0.2.0-1.fc44.noarch.rpm`, then `ls -Z /var/lib/osreflog` should show `osreflog_var_lib_t`, and the testbed again.
+
+### 2026-10-17: the hardening check, as root
+
+`sudo scripts/p8/hardening-check.sh` on the laptop (the units from main, the daemon binary from 2026-10-16, whose code hasn't changed since): install ok; the units carry the filter and `MALLOC_ARENA_MAX=2`; doctor ok; **write gate ok; live undo ok; seeded bisect 5/5** (nspawn and the VM); the boot doctor ok; and **nothing refused** by the filter in the journal. So `@debug` (ptrace, perf events) is safe to refuse: the lineage program loaded and attached.
+
+- **One failure, in the harness:** the testbed's check wants a command cause labeled with `sed` or `testbed`, and run under the wrapper the session's top command is `sudo scripts/p8/hardening-check.sh`. Lineage was right (a `command` cause, coverage 9/9). The wrapper now says who it is (`OSREFLOG_CHECK_PARENT`) and the check accepts that; on the same results: 16/16, 0 failed.
+- **Memory with two arenas:** 56 MB after all of the above, 79 MB after two more large diffs (`c000170..`). Lower than yesterday's 108 MB, but not the same work; the soak decides.

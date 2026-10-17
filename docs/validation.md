@@ -27,6 +27,7 @@ that need no root on every push ([below](#on-every-push)).
 | A probe on real hardware never touches the default boot | `scripts/p7/testvm.sh`, `g2…g5-step.sh` | the boot gate: 4 probes, a hang and a panic in a Secure Boot VM, default untouched |
 | Metal bisect works on this laptop | `scripts/p7/p7d-wifi.sh` | Wi-Fi power save regression found in **3 probes**, 6 reboots |
 | It installs from COPR on a fresh system | `scripts/p8/coprvm.sh` | fresh Fedora 44 Cloud VM, two boots: every check passed |
+| The hardened units leave everything working | `scripts/p8/hardening-check.sh` | install, doctor, testbed 16/16, write gate, live undo, 5/5 bisects, boot doctor: all pass; **nothing refused** by the filter |
 | The history is tamper-evident | `osreflog verify` | the chain verified after every run above (711 entries after P5's) |
 
 ## The state witness (P2)
@@ -143,6 +144,3 @@ Said here so nobody has to find out the hard way.
   types of their own, but osreflogd itself runs unconfined (`unconfined_service_t`): a domain for
   a daemon that reads every file and, on undo, writes any of them would mostly be a label. A
   narrow domain for the undo and summary workers is the next step.
-- **The hardened system units on the real machine.** The user agent's sandbox passed its workload
-  (8/8); the daemon's system call filter and memory setting wait for
-  `scripts/p8/hardening-check.sh`, which runs every check above as root.

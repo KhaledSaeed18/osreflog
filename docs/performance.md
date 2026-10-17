@@ -21,6 +21,11 @@ and rarely returning what was freed in it; 0.2.0 sets `MALLOC_ARENA_MAX=2` in th
 `scripts/p8/hardening-check.sh` measures the daemon around two large diffs to confirm it. The
 unit's ceiling is `MemoryMax=768M`.
 
+With two arenas (2026-10-17, `scripts/p8/hardening-check.sh`): 56 MB after the testbed, the undo
+gate and workload and five bisects, and **79 MB** after two more diffs from `c000170` to now. That
+is less than the 108 MB of the day before, but not the same day's work, so it doesn't prove the
+cause; the 48-hour soak shows whether it keeps growing.
+
 ## Around a package transaction
 
 From the P2 exit run (`scripts/p2/verify.sh`, a real `dnf remove figlet`):
