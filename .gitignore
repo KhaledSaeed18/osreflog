@@ -1,3 +1,4 @@
 target/
 fuzz-out/
 fuzz-out.summary
+/perf-out/
