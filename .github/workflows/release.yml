@@ -31,10 +31,10 @@ jobs:
       # `git archive`.
       - run: dnf install -y --setopt=install_weak_deps=False git-core gh python3 rpm-build dnf5-plugins
       # This workflow's own commit, for CHANGELOG.md; the tagged tree, to build.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           path: tools
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
           path: src
