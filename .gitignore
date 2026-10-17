@@ -5,3 +5,4 @@ fuzz-out.summary
 /data/selinux/*.pp
 /data/selinux/*.pp.bz2
 /data/selinux/tmp/
+__pycache__/
