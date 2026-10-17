@@ -57,8 +57,9 @@ SystemCallArchitectures=native
 SystemCallFilter=~@clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap
 SystemCallErrorNumber=EPERM
 MemoryMax=768M
-# glibc keeps one malloc arena per thread and rarely gives freed memory back: after a few
-# large diffs on the blocking pool the daemon held 108 MB (P8, 2026-10-17). Two arenas bound it.
+# glibc keeps one malloc arena per thread and rarely gives freed memory back; the daemon held
+# 108 MB after a day of large diffs on its blocking pool (P8, 2026-10-17). Two arenas bound
+# what threads can keep; scripts/p8/hardening-check.sh measures it around two diffs.
 Environment=MALLOC_ARENA_MAX=2
 
 [Install]

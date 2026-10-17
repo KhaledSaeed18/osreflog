@@ -34,8 +34,9 @@ The app grows up, and the project gets its release machinery.
 - A new package, `osreflog-selinux`: the ledger, blobs and attic in `/var/lib/osreflog`, and the
   runtime directories, under SELinux types of their own, so confined services can't read the
   history. Installed with `osreflog` wherever SELinux is in use.
-- `MALLOC_ARENA_MAX=2` for the daemon: after a day of large diffs it held 108 MB of freed memory
-  in per-thread arenas.
+- `MALLOC_ARENA_MAX=2` for the daemon, which held 108 MB after a day with several large diffs:
+  glibc keeps a malloc arena per thread and rarely returns what's freed in it. The hardening
+  check measures the difference.
 
 ### Project
 
