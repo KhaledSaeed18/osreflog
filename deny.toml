@@ -7,13 +7,6 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = [
-    # zbus 5's own parts, unmaintained as separate crates since they moved into zbus 6
-    # ("unmaintained", not a vulnerability). Goes away with the move to zbus 6.
-    { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; osreflog is on zbus 5" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; osreflog is on zbus 5" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; osreflog is on zbus 5" },
-]
 
 [licenses]
 version = 2

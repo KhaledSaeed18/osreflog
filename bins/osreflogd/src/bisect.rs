@@ -985,7 +985,7 @@ async fn start_unit(
     mem_mib: u64,
     max_s: u64,
 ) -> zbus::Result<()> {
-    use zbus::zvariant::Value;
+    use zbus::Variant;
     let conn = zbus::Connection::system().await?;
     let exe = exe.to_string_lossy().into_owned();
     let exec: Vec<(String, Vec<String>, bool)> = vec![(
@@ -993,17 +993,17 @@ async fn start_unit(
         vec![exe, flag.to_owned(), arg.to_owned()],
         false,
     )];
-    let props: Vec<(&str, Value<'_>)> = vec![
-        ("Description", Value::from("osreflog bisect probe")),
-        ("ExecStart", Value::from(exec)),
-        ("PrivateMounts", Value::from(true)),
-        ("Delegate", Value::from(true)),
-        ("Nice", Value::from(10i32)),
-        ("MemoryMax", Value::from((mem_mib + 1024) * 1024 * 1024)),
-        ("RuntimeMaxUSec", Value::from(max_s * 1_000_000)),
-        ("CollectMode", Value::from("inactive-or-failed")),
+    let props: Vec<(&str, Variant<'_>)> = vec![
+        ("Description", Variant::from("osreflog bisect probe")),
+        ("ExecStart", Variant::from(exec)),
+        ("PrivateMounts", Variant::from(true)),
+        ("Delegate", Variant::from(true)),
+        ("Nice", Variant::from(10i32)),
+        ("MemoryMax", Variant::from((mem_mib + 1024) * 1024 * 1024)),
+        ("RuntimeMaxUSec", Variant::from(max_s * 1_000_000)),
+        ("CollectMode", Variant::from("inactive-or-failed")),
     ];
-    let aux: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
+    let aux: Vec<(&str, Vec<(&str, Variant<'_>)>)> = Vec::new();
     let (d, path, iface, method) = manager("StartTransientUnit");
     conn.call_method(d, path, iface, method, &(unit, "fail", props, aux))
         .await?;
@@ -1017,7 +1017,7 @@ async fn unit_active(unit: &str) -> zbus::Result<bool> {
     let Ok(reply) = conn.call_method(d, path, iface, method, &(unit,)).await else {
         return Ok(false);
     };
-    let unit_path: zbus::zvariant::OwnedObjectPath = reply.body().deserialize()?;
+    let unit_path: zbus::OwnedObjectPath = reply.body().deserialize()?;
     let state = conn
         .call_method(
             Some("org.freedesktop.systemd1"),
@@ -1027,7 +1027,7 @@ async fn unit_active(unit: &str) -> zbus::Result<bool> {
             &("org.freedesktop.systemd1.Unit", "ActiveState"),
         )
         .await?;
-    let state: zbus::zvariant::OwnedValue = state.body().deserialize()?;
+    let state: zbus::OwnedVariant = state.body().deserialize()?;
     let state = String::try_from(state).unwrap_or_default();
     Ok(!matches!(state.as_str(), "inactive" | "failed"))
 }

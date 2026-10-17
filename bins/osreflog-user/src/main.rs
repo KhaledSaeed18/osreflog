@@ -229,21 +229,21 @@ async fn run() -> anyhow::Result<()> {
 
     let lookup = zbus::Connection::session().await?;
     let dbus = DBusProxy::new(&lookup).await?;
-    let monitor = zbus::connection::Builder::session()?.build().await?;
+    let monitor = zbus::connection::Builder::session().build().await?;
     let rules = [
         MatchRule::builder()
             .msg_type(Type::MethodCall)
-            .interface(WRITER)?
-            .member("Change")?
-            .build(),
+            .interface(WRITER)
+            .member("Change")
+            .build()?,
         MatchRule::builder()
             .msg_type(Type::Signal)
-            .interface(WRITER)?
-            .member("Notify")?
-            .build(),
+            .interface(WRITER)
+            .member("Notify")
+            .build()?,
         // The reply carries the tag that ties a call to its Notify. Replies can't be matched
         // by sender here, so they're filtered against pending calls below.
-        MatchRule::builder().msg_type(Type::MethodReturn).build(),
+        MatchRule::builder().msg_type(Type::MethodReturn).build()?,
     ];
     MonitoringProxy::new(&monitor)
         .await?

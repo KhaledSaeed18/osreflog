@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
+use zbus::Variant;
 use zbus::names::BusName;
-use zbus::zvariant::Value;
 
 #[zbus::proxy(
     interface = "org.freedesktop.PolicyKit1.Authority",
@@ -16,7 +16,7 @@ use zbus::zvariant::Value;
 trait Authority {
     fn check_authorization(
         &self,
-        subject: &(&str, HashMap<&str, Value<'_>>),
+        subject: &(&str, HashMap<&str, Variant<'_>>),
         action_id: &str,
         details: HashMap<&str, &str>,
         flags: u32,
@@ -52,7 +52,7 @@ pub async fn polkit_allows(
     let authority = AuthorityProxy::new(connection).await?;
     let subject = (
         "system-bus-name",
-        HashMap::from([("name", Value::from(caller))]),
+        HashMap::from([("name", Variant::from(caller))]),
     );
     let flags = if interactive {
         ALLOW_USER_INTERACTION

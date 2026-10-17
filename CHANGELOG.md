@@ -4,6 +4,11 @@ What changed in each release, for people running osreflog. The design and the me
 behind each change are in [docs/journal/](docs/journal/). The release workflow takes a
 release's notes from its section here.
 
+## Unreleased
+
+- D-Bus is on zbus 6 (daemon, CLI, app and user agent); zbus 5's separate zvariant, zbus_names
+  and zvariant_derive crates, now unmaintained, are gone from the build.
+
 ## 0.2.0 (2026-10-17)
 
 The app grows up, and the project gets its release machinery.

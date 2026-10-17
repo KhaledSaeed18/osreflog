@@ -33,7 +33,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-journald.workspace = true
 tracing-subscriber.workspace = true
-zbus.workspace = true
+zbus = { workspace = true, features = ["service"] }
 
 [dev-dependencies]
 serde_json.workspace = true

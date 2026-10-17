@@ -149,8 +149,8 @@ async fn pid_of(dbus: &DBusProxy<'_>, name: &str) -> Option<u32> {
 pub async fn run(live: Arc<LiveState>) -> zbus::Result<()> {
     let lookup = zbus::Connection::system().await?;
     let dbus = DBusProxy::new(&lookup).await?;
-    let monitor = zbus::connection::Builder::system()?.build().await?;
-    let rule = MatchRule::builder().msg_type(Type::MethodCall).build();
+    let monitor = zbus::connection::Builder::system().build().await?;
+    let rule = MatchRule::builder().msg_type(Type::MethodCall).build()?;
     MonitoringProxy::new(&monitor)
         .await?
         .become_monitor(&[rule], 0)
