@@ -4,6 +4,7 @@
 # built here with the toolchain on PATH (--nodeps: rustup's cargo, not Fedora's).
 #
 #   scripts/dist.sh [--rpm]
+#   scripts/dist.sh --check      # only the Version and License checks (CI runs this)
 #   copr-cli build osreflog target/dist/rpmbuild/SRPMS/osreflog-*.src.rpm
 #
 # Needs a clean git tree, and checks that the spec's Version and License agree with the
@@ -14,9 +15,11 @@ cd "$REPO"
 SPEC=packaging/osreflog.spec
 DIST=target/dist
 RPM=false
+CHECK=false
 [ "${1:-}" = --rpm ] && RPM=true
+[ "${1:-}" = --check ] && CHECK=true
 
-[ -z "$(git status --porcelain)" ] || { echo "the git tree isn't clean: commit first" >&2; exit 1; }
+$CHECK || [ -z "$(git status --porcelain)" ] || { echo "the git tree isn't clean: commit first" >&2; exit 1; }
 
 version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
 spec_version=$(sed -n 's/^Version: *//p' $SPEC)
@@ -61,6 +64,10 @@ if [ "$license" != "$spec_license" ]; then
     echo "the spec's License doesn't match the shipped crates; it should be:" >&2
     echo "License:        $license" >&2
     exit 1
+fi
+if $CHECK; then
+    echo "the spec agrees with the workspace: version $version, License of the shipped crates"
+    exit 0
 fi
 
 rm -rf "$DIST"
