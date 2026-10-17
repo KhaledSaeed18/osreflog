@@ -122,3 +122,15 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - **The status line** in the sidebar's title is now short ("recording · 139 checkpoints"); the full line (last checkpoint, its time and reason) is its tooltip.
 - **Search**: a search box above the causes keeps the ones whose label, kind, process name, command or `#id` holds every word typed, ignoring case; "No matching causes" when none does. The filter holds across the 5 s refresh. `view::matches`, `view::status_short`: 9 tests in all. Development hook: `OSREFLOG_APP_OPEN=search:<text>`.
 - **Seen against the real daemon** (Broadway): `search:dnf` listed the dnf transactions and the `sudo sh -c dnf install …` commands, one line each; `search:zzqq` showed the empty page, still there after a refresh.
+
+### 2026-10-17: a pass over the look and feel
+
+- **Where you are**: the sidebar row of what the content side shows (a cause, its undo, a checkpoint's diff, the bisect session) is tinted with the accent color, kept across refreshes and searches.
+- **Loading**: libadwaita's animated spinner (`AdwSpinnerPaintable`, so the app needs libadwaita 1.6; the spec says so) instead of the static `content-loading` icon, on the sidebar's first read and on the content side. Picking a cause shows the loading page only when the answer takes more than 200 ms, so a cause read in a few ms no longer flashes; on a narrow window the content slides in at once, with the loading page.
+- **Motion**: the sidebar and content stacks crossfade; a new page fades in (180 ms) and starts at the top instead of the last page's scroll position. A running bisect's page, refreshed every second, neither fades nor jumps.
+- **Page headers**: every page opens with an icon (tinted green for an undo or bisect that succeeded, amber for one that needs you or went wrong), a title kept to two lines (the whole of it in the tooltip) and one line of facts ("#843 · unit · 1 change · 2026-10-17 17:49:05"). The heading used to be the cause's whole command, three lines of bold. The header bar says only "#843". **Undo…** sits in the cause's header. The command is in monospace, and "Kind", already in the header, is gone from the facts.
+- **Spacing**: 24 px between a page's groups (18 before), 24 px at the top, 36 at the bottom; buttons sit in rows of their own (Open #780 and Take back the last verdict side by side).
+- **Feedback**: toasts for a verdict sent, a probe armed again, a verdict taken back, an undo done, and the daemon answering again after it was down.
+- **Keys**: Ctrl+F goes to the causes and their search; Escape clears it; F5 or Ctrl+R refreshes now.
+- **Bisect**: the session's header says "Found #780 in 3 probes" (the finding below names it); the sidebar row keeps to two lines each.
+- **Seen** (Broadway, against the real daemon): a cause with its highlighted row, an undo preview, a diff's spinner then its page, a finished bisect; no GTK warnings. Not seen: the narrow window (Broadway's window can't be resized from the browser) and the keys and toasts (it drops input); for the owner's desktop.

@@ -11,7 +11,10 @@ use osreflog_bisect::Status;
 
 use crate::backend::{Failure, Request};
 use crate::view::{self, BisectForm, TierChoice};
-use crate::{Selected, Ui, action_row, clear, facts_group, file_row, heading, local_full};
+use crate::{
+    Selected, Ui, action_row, button_row, clear, facts_group, file_row, local_full, page_header,
+    reveal, toast,
+};
 
 /// Rebuilds the sidebar's Bisect view when the session changed.
 pub fn sidebar(ui: &Rc<Ui>, s: Option<&Status>) {
@@ -20,6 +23,7 @@ pub fn sidebar(ui: &Rc<Ui>, s: Option<&Status>) {
     }
     *ui.bisect_status.borrow_mut() = s.cloned();
     clear(&ui.bisect_side);
+    *ui.bisect_row.borrow_mut() = None;
     if let Some(s) = s {
         let group = adw::PreferencesGroup::builder()
             .title(if s.running {
@@ -29,6 +33,8 @@ pub fn sidebar(ui: &Rc<Ui>, s: Option<&Status>) {
             })
             .build();
         let row = action_row(&view::session_title(s), &view::session_state(s));
+        row.set_title_lines(2);
+        row.set_subtitle_lines(2);
         row.set_activatable(true);
         row.add_prefix(&gtk::Image::from_icon_name(if s.waiting.is_some() {
             "dialog-question-symbolic"
@@ -41,6 +47,7 @@ pub fn sidebar(ui: &Rc<Ui>, s: Option<&Status>) {
         row.connect_activated(move |_| select_session(&ui3));
         group.add(&row);
         ui.bisect_side.append(&group);
+        *ui.bisect_row.borrow_mut() = Some(row);
     }
     let intro = gtk::Label::builder()
         .label(
@@ -61,6 +68,7 @@ pub fn sidebar(ui: &Rc<Ui>, s: Option<&Status>) {
     let ui3 = Rc::clone(ui);
     new.connect_clicked(move |_| show_form(&ui3));
     ui.bisect_side.append(&new);
+    crate::highlight(ui);
 }
 
 /// The answer to `BisectStatus` (also sent after every bisect action).
@@ -93,6 +101,7 @@ pub fn refused(ui: &Rc<Ui>, what: &str, f: &Failure) {
 
 pub fn select_session(ui: &Rc<Ui>) {
     *ui.selected.borrow_mut() = Some(Selected::Bisect);
+    crate::highlight(ui);
     *ui.shown_session.borrow_mut() = None;
     let s = ui.bisect_status.borrow().clone();
     render_session(ui, s.as_ref());
@@ -120,11 +129,16 @@ fn switch(title: &str, subtitle: &str) -> adw::SwitchRow {
 #[allow(clippy::too_many_lines)]
 pub fn show_form(ui: &Rc<Ui>) {
     *ui.selected.borrow_mut() = Some(Selected::BisectForm);
+    crate::highlight(ui);
     crate::clear_detail(ui);
     ui.content_page.set_title("New bisect");
-    ui.split.set_show_content(true);
-    ui.detail
-        .append(&heading("Find the change that broke something"));
+    ui.detail.append(&page_header(
+        "edit-find-symbolic",
+        None,
+        "New bisect",
+        "Find the change that broke something",
+        None,
+    ));
 
     let names = ui.names.borrow().clone();
     if names.len() < 2 {
@@ -134,7 +148,7 @@ pub fn show_form(ui: &Rc<Ui>) {
             .description("A bisect runs between a checkpoint where things worked and a newer one where they don't. Take one with  sudo osreflog checkpoint.")
             .build();
         ui.detail.append(&none);
-        ui.content.set_visible_child_name("detail");
+        reveal(ui, true);
         return;
     }
     let ends = adw::PreferencesGroup::builder().title("Between").build();
@@ -210,7 +224,6 @@ pub fn show_form(ui: &Rc<Ui>) {
     let start = gtk::Button::with_label("Start");
     start.add_css_class("pill");
     start.add_css_class("suggested-action");
-    start.set_halign(gtk::Align::Start);
     let ui3 = Rc::clone(ui);
     start.connect_clicked(move |_| {
         let pick = |row: &adw::ComboRow| {
@@ -238,6 +251,7 @@ pub fn show_form(ui: &Rc<Ui>) {
             Ok(args) => {
                 error.set_label("");
                 *ui3.selected.borrow_mut() = Some(Selected::Bisect);
+                *ui3.pending.borrow_mut() = Some(Selected::Bisect);
                 *ui3.shown_session.borrow_mut() = None;
                 ui3.busy.set_title("Starting the bisect…");
                 ui3.busy.set_description(Some(
@@ -249,8 +263,10 @@ pub fn show_form(ui: &Rc<Ui>) {
             Err(e) => error.set_label(&e),
         }
     });
-    ui.detail.append(&start);
-    ui.content.set_visible_child_name("detail");
+    let buttons = button_row();
+    buttons.append(&start);
+    ui.detail.append(&buttons);
+    reveal(ui, true);
 }
 
 fn pill(label: &str, class: Option<&str>) -> gtk::Button {
@@ -328,9 +344,12 @@ fn confirm_reset(ui: &Rc<Ui>, running: bool) {
 // The session page in one place: long, but flat.
 #[allow(clippy::too_many_lines)]
 fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
-    *ui.shown_session.borrow_mut() = s.cloned();
+    // A new page fades in; the same session refreshed (a probe done, a verdict taken) doesn't.
+    let fresh = ui
+        .shown_session
+        .replace(s.cloned())
+        .is_none_or(|old| s.is_none_or(|s| s.started_ms != old.started_ms));
     crate::clear_detail(ui);
-    ui.split.set_show_content(true);
     let Some(s) = s else {
         ui.content_page.set_title("Bisect");
         let none = adw::StatusPage::builder()
@@ -339,18 +358,18 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
             .description("Start one from the Bisect view.")
             .build();
         ui.detail.append(&none);
-        ui.content.set_visible_child_name("detail");
+        reveal(ui, true);
         return;
     };
     ui.content_page.set_title("Bisect");
-    ui.detail.append(&heading(&view::session_title(s)));
-    let state = gtk::Label::builder()
-        .label(view::session_state(s))
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-    state.add_css_class("title-4");
-    ui.detail.append(&state);
+    let (icon, tone) = session_icon(s);
+    ui.detail.append(&page_header(
+        icon,
+        tone,
+        &view::session_title(s),
+        &header_line(s),
+        None,
+    ));
 
     if let Some(w) = &s.waiting {
         let group = adw::PreferencesGroup::builder()
@@ -363,7 +382,7 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
             group.add(&row);
         }
         ui.detail.append(&group);
-        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let buttons = button_row();
         if w.reboot {
             let reboot = pill("Reboot now…", Some("suggested-action"));
             let ui3 = Rc::clone(ui);
@@ -373,7 +392,9 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
         } else if s.args.tier == osreflog_bisect::Tier::Metal {
             let rearm = pill("Arm it again", None);
             let ui3 = Rc::clone(ui);
-            rearm.connect_clicked(move |_| {
+            rearm.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                toast(&ui3, "Arming the probe again…");
                 let _ = ui3.requests.try_send(Request::BisectRearm);
             });
             buttons.append(&rearm);
@@ -394,6 +415,7 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
             b.connect_clicked(move |_| {
                 // One verdict per probe: a second click could land on the next probe.
                 row.set_sensitive(false);
+                toast(&ui3, &format!("Verdict sent: {label}"));
                 let _ = ui3
                     .requests
                     .try_send(Request::BisectVerdict(verdict.to_owned()));
@@ -403,18 +425,20 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
         ui.detail.append(&buttons);
     }
 
+    let actions = button_row();
     if let Some((title, lines, open)) = view::finding(s) {
         let group = adw::PreferencesGroup::builder().title(&title).build();
         for line in lines.iter().filter(|l| !l.is_empty()) {
-            group.add(&action_row(line, ""));
+            let row = action_row(line, "");
+            row.set_title_selectable(true);
+            group.add(&row);
         }
         ui.detail.append(&group);
         if let Some(id) = open {
             let b = pill(&format!("Open #{id}"), Some("suggested-action"));
-            b.set_halign(gtk::Align::Start);
             let ui3 = Rc::clone(ui);
             b.connect_clicked(move |_| crate::select_cause(&ui3, id));
-            ui.detail.append(&b);
+            actions.append(&b);
         }
     }
 
@@ -429,13 +453,16 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
                 ": the bisect goes on"
             }
         )));
-        back.set_halign(gtk::Align::Start);
         let ui3 = Rc::clone(ui);
         back.connect_clicked(move |b| {
             b.set_sensitive(false);
+            toast(&ui3, "Taking back the last verdict…");
             let _ = ui3.requests.try_send(Request::BisectUndoVerdict);
         });
-        ui.detail.append(&back);
+        actions.append(&back);
+    }
+    if actions.first_child().is_some() {
+        ui.detail.append(&actions);
     }
 
     let probes = view::probe_rows(s);
@@ -482,12 +509,46 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
         },
         None,
     );
-    reset.set_halign(gtk::Align::Start);
     let ui3 = Rc::clone(ui);
     let running = s.running;
     reset.connect_clicked(move |_| confirm_reset(&ui3, running));
-    ui.detail.append(&reset);
-    ui.content.set_visible_child_name("detail");
+    let buttons = button_row();
+    buttons.append(&reset);
+    ui.detail.append(&buttons);
+    reveal(ui, fresh);
+}
+
+/// The line under a session's title: its state, but a found cause only by its number, since
+/// the finding below says what it is.
+fn header_line(s: &Status) -> String {
+    match &s.finding {
+        Some(osreflog_bisect::Finding::Cause { culprit, .. }) if s.error.is_none() => format!(
+            "Found #{} in {} probe{}",
+            culprit.id,
+            s.probes.len(),
+            if s.probes.len() == 1 { "" } else { "s" }
+        ),
+        _ => view::session_state(s),
+    }
+}
+
+/// The icon at the head of a session's page, and its tone: waiting on you, running, found.
+fn session_icon(s: &Status) -> (&'static str, Option<&'static str>) {
+    use osreflog_bisect::Finding;
+    if s.waiting.is_some() {
+        ("dialog-question-symbolic", Some("warning"))
+    } else if s.running {
+        ("edit-find-symbolic", None)
+    } else if s.error.is_some() {
+        ("dialog-warning-symbolic", Some("warning"))
+    } else if matches!(
+        s.finding,
+        Some(Finding::Cause { .. } | Finding::Checkpoint { .. })
+    ) {
+        ("object-select-symbolic", Some("success"))
+    } else {
+        ("edit-find-symbolic", None)
+    }
 }
 
 /// While a session runs and its page is open, ask for it every second.

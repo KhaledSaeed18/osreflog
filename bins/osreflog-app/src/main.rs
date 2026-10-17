@@ -6,8 +6,10 @@ mod backend;
 mod bisect_page;
 mod view;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
 use backend::{Failure, History, Reply, Request};
@@ -21,9 +23,42 @@ const REFRESH_S: u32 = 5;
 const MAX_ROWS: usize = 400;
 /// The live system, as a diff's newer side.
 const NOW: &str = "@{now}";
+/// An answer slower than this shows the loading page; a faster one (most causes take a few ms)
+/// would only make it flash.
+const BUSY_AFTER: Duration = Duration::from_millis(200);
+/// How long a new page takes to fade in.
+const FADE_MS: u32 = 180;
+
+/// The few styles libadwaita has no class for: the open row in the sidebar, the icon at the
+/// head of a page, commands in monospace.
+const CSS: &str = "
+list.boxed-list > row.current { background-color: alpha(var(--accent-bg-color), 0.16); }
+list.boxed-list > row.current:hover { background-color: alpha(var(--accent-bg-color), 0.22); }
+.page-icon {
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 12px;
+  color: var(--accent-color);
+  background-color: alpha(var(--accent-bg-color), 0.14);
+}
+.page-icon.success { color: var(--success-color); background-color: alpha(var(--success-bg-color), 0.16); }
+.page-icon.warning { color: var(--warning-color); background-color: alpha(var(--warning-bg-color), 0.16); }
+row.command .subtitle { font-family: monospace; }
+";
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
+    app.connect_startup(|_| {
+        let css = gtk::CssProvider::new();
+        css.load_from_string(CSS);
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &css,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
     app.connect_activate(build);
     app.run()
 }
@@ -80,6 +115,7 @@ struct Ui {
     split: adw::NavigationSplitView,
     title: adw::WindowTitle,
     sidebar: gtk::Stack,
+    views: adw::ViewStack,
     timeline: gtk::Box,
     checkpoints: gtk::Box,
     down: adw::StatusPage,
@@ -87,8 +123,19 @@ struct Ui {
     content: gtk::Stack,
     busy: adw::StatusPage,
     detail: gtk::Box,
+    detail_scroll: gtk::ScrolledWindow,
+    toasts: adw::ToastOverlay,
     requests: async_channel::Sender<Request>,
     selected: RefCell<Option<Selected>>,
+    /// What was asked for and hasn't been shown yet: the loading page waits on it.
+    pending: RefCell<Option<Selected>>,
+    /// The sidebar's rows by what they open, and the one marked as open now.
+    cause_rows: RefCell<HashMap<i64, adw::ActionRow>>,
+    checkpoint_rows: RefCell<HashMap<String, adw::ActionRow>>,
+    bisect_row: RefCell<Option<adw::ActionRow>>,
+    marked: RefCell<Option<adw::ActionRow>>,
+    /// The daemon wasn't answering at the last refresh.
+    was_down: Cell<bool>,
     /// The newest checkpoint names (newest first), for the diff's "until" choice.
     names: RefCell<Vec<String>>,
     /// What the two lists show now, so an unchanged refresh doesn't rebuild them.
@@ -185,10 +232,12 @@ fn build(app: &adw::Application) {
         .title("osreflog isn't running")
         .build();
     let loading = adw::StatusPage::builder()
-        .icon_name("content-loading-symbolic")
         .title("Reading the history…")
         .build();
-    let sidebar = gtk::Stack::new();
+    loading.set_paintable(Some(&adw::SpinnerPaintable::new(Some(&loading))));
+    let sidebar = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .build();
     sidebar.add_named(&loading, Some("loading"));
     sidebar.add_named(&views, Some("views"));
     sidebar.add_named(&down, Some("down"));
@@ -203,8 +252,11 @@ fn build(app: &adw::Application) {
         .build();
 
     // Content: the selected cause or diff.
-    let detail = page_box();
-    detail.set_margin_bottom(24);
+    let detail = gtk::Box::new(gtk::Orientation::Vertical, 24);
+    detail.set_margin_top(24);
+    detail.set_margin_bottom(36);
+    detail.set_margin_start(12);
+    detail.set_margin_end(12);
     let detail_clamp = adw::Clamp::builder()
         .maximum_size(900)
         .child(&detail)
@@ -214,16 +266,21 @@ fn build(app: &adw::Application) {
         .title("Pick a cause or a checkpoint")
         .description("A cause is one thing that changed this system: a command, a service, a package transaction, an app. A checkpoint shows what changed since it.")
         .build();
-    let busy = adw::StatusPage::builder()
-        .icon_name("content-loading-symbolic")
+    let busy = adw::StatusPage::new();
+    busy.set_paintable(Some(&adw::SpinnerPaintable::new(Some(&busy))));
+    let content = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(150)
         .build();
-    let content = gtk::Stack::new();
+    let detail_scroll = scrolled(&detail_clamp);
     content.add_named(&pick, Some("pick"));
     content.add_named(&busy, Some("busy"));
-    content.add_named(&scrolled(&detail_clamp), Some("detail"));
+    content.add_named(&detail_scroll, Some("detail"));
+    let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&content));
     let content_view = adw::ToolbarView::new();
     content_view.add_top_bar(&adw::HeaderBar::new());
-    content_view.set_content(Some(&content));
+    content_view.set_content(Some(&toasts));
     let content_page = adw::NavigationPage::builder()
         .title("osreflog")
         .child(&content_view)
@@ -255,6 +312,7 @@ fn build(app: &adw::Application) {
         split,
         title,
         sidebar,
+        views: views.clone(),
         timeline,
         checkpoints,
         down,
@@ -262,8 +320,16 @@ fn build(app: &adw::Application) {
         content,
         busy,
         detail,
+        detail_scroll,
+        toasts,
         requests: requests.clone(),
         selected: RefCell::new(None),
+        pending: RefCell::new(None),
+        cause_rows: RefCell::new(HashMap::new()),
+        checkpoint_rows: RefCell::new(HashMap::new()),
+        bisect_row: RefCell::new(None),
+        marked: RefCell::new(None),
+        was_down: Cell::new(false),
         names: RefCell::new(Vec::new()),
         shown_causes: RefCell::new(None),
         causes: RefCell::new(Vec::new()),
@@ -279,6 +345,8 @@ fn build(app: &adw::Application) {
         let causes = ui4.causes.borrow().clone();
         show_causes(&ui4, &causes, &day_of(0));
     });
+    ui.search.connect_stop_search(|s| s.set_text(""));
+    shortcuts(&ui);
 
     let ui2 = Rc::clone(&ui);
     glib::spawn_future_local(async move {
@@ -333,7 +401,10 @@ fn build(app: &adw::Application) {
                     select_cause(&ui, id);
                 }
             }
-            Some(("bisect", "session")) => bisect_page::select_session(&ui),
+            Some(("bisect", "session")) => {
+                ui.views.set_visible_child_name("bisect");
+                bisect_page::select_session(&ui);
+            }
             Some(("bisect", "new")) => {
                 // The form needs the checkpoint names: build it once the first history is in.
                 let ui5 = Rc::clone(&ui);
@@ -361,6 +432,151 @@ fn build(app: &adw::Application) {
     window.present();
 }
 
+/// Ctrl+F searches the causes; F5 or Ctrl+R asks for news now instead of at the next refresh.
+fn shortcuts(ui: &Rc<Ui>) {
+    let keys = gtk::ShortcutController::new();
+    keys.set_scope(gtk::ShortcutScope::Global);
+    let ui3 = Rc::clone(ui);
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("<Control>f"),
+        Some(gtk::CallbackAction::new(move |_, _| {
+            ui3.views.set_visible_child_name("causes");
+            ui3.split.set_show_content(false);
+            ui3.search.grab_focus();
+            glib::Propagation::Stop
+        })),
+    ));
+    let ui3 = Rc::clone(ui);
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("F5|<Control>r"),
+        Some(gtk::CallbackAction::new(move |_, _| {
+            let _ = ui3.requests.try_send(Request::Refresh);
+            glib::Propagation::Stop
+        })),
+    ));
+    ui.window.add_controller(keys);
+}
+
+/// Marks the sidebar row of what the content side shows, and only that one.
+fn highlight(ui: &Ui) {
+    if let Some(old) = ui.marked.take() {
+        old.remove_css_class("current");
+    }
+    let row = match &*ui.selected.borrow() {
+        Some(Selected::Cause(id) | Selected::Undo(id)) => ui.cause_rows.borrow().get(id).cloned(),
+        Some(Selected::Diff { from, .. }) => ui.checkpoint_rows.borrow().get(from).cloned(),
+        Some(Selected::Bisect) => ui.bisect_row.borrow().clone(),
+        Some(Selected::BisectForm) | None => None,
+    };
+    if let Some(row) = row {
+        row.add_css_class("current");
+        *ui.marked.borrow_mut() = Some(row);
+    }
+}
+
+/// Asks for `what`: the content side shows it once it comes, and the loading page with
+/// `title` only if that takes longer than [`BUSY_AFTER`].
+fn wait_for(ui: &Rc<Ui>, what: Selected, title: String, description: &'static str) {
+    *ui.selected.borrow_mut() = Some(what.clone());
+    *ui.pending.borrow_mut() = Some(what.clone());
+    highlight(ui);
+    let show_busy = {
+        let ui = Rc::clone(ui);
+        move || {
+            if ui.pending.borrow().as_ref() == Some(&what) {
+                ui.busy.set_title(&title);
+                ui.busy.set_description(Some(description));
+                ui.content.set_visible_child_name("busy");
+            }
+        }
+    };
+    if ui.split.is_collapsed() && !ui.split.shows_content() {
+        // On a narrow window the content slides in now: with the loading page, not the last one.
+        show_busy();
+        ui.split.set_show_content(true);
+    } else {
+        glib::timeout_add_local_once(BUSY_AFTER, show_busy);
+    }
+}
+
+/// Shows the content page just built. A new page starts at the top and fades in; a refresh of
+/// the page shown (a running bisect) stays where it was.
+fn reveal(ui: &Ui, fresh: bool) {
+    *ui.pending.borrow_mut() = None;
+    ui.content.set_visible_child_name("detail");
+    ui.split.set_show_content(true);
+    if fresh {
+        ui.detail_scroll.vadjustment().set_value(0.0);
+        let target = adw::PropertyAnimationTarget::new(&ui.detail, "opacity");
+        adw::TimedAnimation::new(&ui.detail, 0.0, 1.0, FADE_MS, target).play();
+    }
+}
+
+fn toast(ui: &Ui, text: &str) {
+    let t = adw::Toast::new(text);
+    t.set_timeout(3);
+    ui.toasts.add_toast(t);
+}
+
+/// The head of a page: an icon, the title (two lines at most, all of it in the tooltip), a line
+/// of facts, and on the right what can be done with it.
+fn page_header(
+    icon: &str,
+    tone: Option<&str>,
+    title: &str,
+    subtitle: &str,
+    end: Option<&gtk::Widget>,
+) -> gtk::Box {
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    let image = gtk::Image::from_icon_name(icon);
+    image.set_pixel_size(24);
+    image.set_valign(gtk::Align::Start);
+    image.add_css_class("page-icon");
+    if let Some(tone) = tone {
+        image.add_css_class(tone);
+    }
+    head.append(&image);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    text.set_hexpand(true);
+    text.set_valign(gtk::Align::Center);
+    let t = gtk::Label::builder()
+        .label(title)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
+        .lines(2)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .xalign(0.0)
+        .tooltip_text(title)
+        .build();
+    t.add_css_class("title-2");
+    text.append(&t);
+    if !subtitle.is_empty() {
+        let sub = gtk::Label::builder()
+            .label(subtitle)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .lines(3)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .xalign(0.0)
+            .build();
+        sub.add_css_class("dim-label");
+        text.append(&sub);
+    }
+    head.append(&text);
+    if let Some(end) = end {
+        end.set_valign(gtk::Align::Center);
+        head.append(end);
+    }
+    head
+}
+
+/// A row of buttons under a page's content.
+fn button_row() -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    b.set_halign(gtk::Align::Start);
+    b
+}
+
 /// Empties the content page. Focus leaves it first: a clicked button removed while focused
 /// left GTK checking focus ancestry against a widget that was gone (`gtk_widget_is_ancestor:
 /// assertion 'GTK_IS_WIDGET (widget)' failed`).
@@ -377,25 +593,23 @@ fn clear(b: &gtk::Box) {
 
 /// Asks for a cause, showing that it's coming.
 fn select_cause(ui: &Rc<Ui>, id: i64) {
-    *ui.selected.borrow_mut() = Some(Selected::Cause(id));
+    wait_for(ui, Selected::Cause(id), format!("Reading #{id}…"), "");
     let _ = ui.requests.try_send(Request::Show(id));
 }
 
 /// Asks for a diff, showing that it's being computed (a diff to now can take seconds).
 fn select_diff(ui: &Rc<Ui>, from: &str, to: &str, all: bool) {
-    *ui.selected.borrow_mut() = Some(Selected::Diff {
-        from: from.to_owned(),
-        to: to.to_owned(),
-        all,
-    });
     let until = if to == NOW { "now" } else { to };
-    ui.busy
-        .set_title(&format!("Comparing {from} with {until}…"));
-    ui.busy.set_description(Some(
+    wait_for(
+        ui,
+        Selected::Diff {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            all,
+        },
+        format!("Comparing {from} with {until}…"),
         "osreflog reads the difference between the two snapshots.",
-    ));
-    ui.content.set_visible_child_name("busy");
-    ui.split.set_show_content(true);
+    );
     let _ = ui.requests.try_send(Request::Diff {
         from: from.to_owned(),
         to: to.to_owned(),
@@ -418,12 +632,16 @@ fn show_history(ui: &Rc<Ui>, r: Result<Box<History>, Failure>) {
             }
             ui.title.set_subtitle("");
             ui.title.set_tooltip_text(None);
+            ui.was_down.set(true);
             ui.sidebar.set_visible_child_name("down");
             *ui.shown_causes.borrow_mut() = None;
             *ui.shown_checkpoints.borrow_mut() = None;
             return;
         }
     };
+    if ui.was_down.replace(false) {
+        toast(ui, "osreflog is answering again");
+    }
     ui.title.set_subtitle(&view::status_short(&status));
     ui.title
         .set_tooltip_text(Some(&view::status_line(&status, local_full)));
@@ -474,6 +692,7 @@ fn show_causes(ui: &Rc<Ui>, causes: &[osreflog_model::Cause], today: &str) {
         return;
     }
     clear(&ui.timeline);
+    ui.cause_rows.borrow_mut().clear();
     let days = view::days(&found, local, today, &day_of(-1));
     if days.is_empty() && !query.trim().is_empty() {
         let empty = adw::StatusPage::builder()
@@ -501,10 +720,12 @@ fn show_causes(ui: &Rc<Ui>, causes: &[osreflog_model::Cause], today: &str) {
             let id = row.id;
             r.connect_activated(move |_| select_cause(&ui3, id));
             group.add(&r);
+            ui.cause_rows.borrow_mut().insert(id, r);
         }
         ui.timeline.append(&group);
     }
     *ui.shown_causes.borrow_mut() = Some(key);
+    highlight(ui);
 }
 
 fn show_checkpoints(ui: &Rc<Ui>, log: &[LogEntry], today: &str) {
@@ -519,6 +740,7 @@ fn show_checkpoints(ui: &Rc<Ui>, log: &[LogEntry], today: &str) {
     }
     *ui.names.borrow_mut() = log.iter().map(|e| e.checkpoint.name.clone()).collect();
     clear(&ui.checkpoints);
+    ui.checkpoint_rows.borrow_mut().clear();
     for (label, rows) in view::checkpoint_days(log, local, today, &day_of(-1)) {
         let group = adw::PreferencesGroup::builder().title(&label).build();
         for row in rows {
@@ -530,10 +752,12 @@ fn show_checkpoints(ui: &Rc<Ui>, log: &[LogEntry], today: &str) {
             let name = row.name.clone();
             r.connect_activated(move |_| select_diff(&ui3, &name, NOW, false));
             group.add(&r);
+            ui.checkpoint_rows.borrow_mut().insert(row.name, r);
         }
         ui.checkpoints.append(&group);
     }
     *ui.shown_checkpoints.borrow_mut() = Some(key);
+    highlight(ui);
 }
 
 fn failure_page(ui: &Ui, title: &str, f: Failure) {
@@ -543,18 +767,7 @@ fn failure_page(ui: &Ui, title: &str, f: Failure) {
         .description(f.message)
         .build();
     ui.detail.append(&page);
-    ui.content.set_visible_child_name("detail");
-}
-
-fn heading(text: &str) -> gtk::Label {
-    let l = gtk::Label::builder()
-        .label(text)
-        .wrap(true)
-        .xalign(0.0)
-        .selectable(true)
-        .build();
-    l.add_css_class("title-2");
-    l
+    reveal(ui, true);
 }
 
 fn facts_group(facts: Vec<(&'static str, String)>) -> adw::PreferencesGroup {
@@ -563,6 +776,9 @@ fn facts_group(facts: Vec<(&'static str, String)>) -> adw::PreferencesGroup {
         let row = action_row(label, &value);
         row.set_subtitle_selectable(true);
         row.add_css_class("property");
+        if label == "Command" {
+            row.add_css_class("command");
+        }
         group.add(&row);
     }
     group
@@ -596,7 +812,6 @@ fn file_row(title: &str, subtitle: &str, summary: &[String], expanded: bool) -> 
 
 fn show_detail(ui: &Rc<Ui>, id: i64, r: Result<CauseDetail, Failure>) {
     clear_detail(ui);
-    ui.split.set_show_content(true);
     let d = match r {
         Ok(d) => d,
         Err(f) => {
@@ -605,19 +820,29 @@ fn show_detail(ui: &Rc<Ui>, id: i64, r: Result<CauseDetail, Failure>) {
             return;
         }
     };
-    ui.content_page
-        .set_title(&format!("#{} {}", d.cause.id, d.cause.label));
-    ui.detail.append(&heading(&d.cause.label));
-    ui.detail.append(&facts_group(view::facts(&d, local_full)));
+    ui.content_page.set_title(&format!("#{}", d.cause.id));
     let undo = gtk::Button::builder()
         .label("Undo…")
         .tooltip_text("See what undoing this cause would do; nothing changes until you confirm")
-        .halign(gtk::Align::Start)
         .build();
-    undo.add_css_class("pill");
     let ui3 = Rc::clone(ui);
     undo.connect_clicked(move |_| select_undo(&ui3, id));
-    ui.detail.append(&undo);
+    ui.detail.append(&page_header(
+        view::kind_icon(&d.cause.kind),
+        None,
+        &d.cause.label,
+        &format!(
+            "#{} · {} · {}",
+            d.cause.id,
+            view::subtitle(&d.cause),
+            local_full(d.cause.started_ms)
+        ),
+        Some(undo.upcast_ref()),
+    ));
+    // The header already says the kind.
+    let mut facts = view::facts(&d, local_full);
+    facts.retain(|(label, _)| *label != "Kind");
+    ui.detail.append(&facts_group(facts));
 
     let changes = adw::PreferencesGroup::builder()
         .title(format!("Changes ({})", d.changes.len()))
@@ -638,7 +863,7 @@ fn show_detail(ui: &Rc<Ui>, id: i64, r: Result<CauseDetail, Failure>) {
         );
     }
     ui.detail.append(&changes);
-    ui.content.set_visible_child_name("detail");
+    reveal(ui, true);
 }
 
 /// The "until" choice: now, or any checkpoint newer than `from`.
@@ -686,8 +911,17 @@ fn show_diff(ui: &Rc<Ui>, from: &str, to: &str, all: bool, r: Result<Box<DiffRep
             return;
         }
     };
-    ui.detail
-        .append(&heading(&format!("What changed since {from}")));
+    ui.detail.append(&page_header(
+        "document-open-recent-symbolic",
+        None,
+        &format!("What changed since {from}"),
+        &if to == NOW {
+            "until now".to_owned()
+        } else {
+            format!("until {to}")
+        },
+        None,
+    ));
 
     let choose = adw::PreferencesGroup::new();
     choose.add(&until_row(ui, from, to, all));
@@ -719,7 +953,7 @@ fn show_diff(ui: &Rc<Ui>, from: &str, to: &str, all: bool, r: Result<Box<DiffRep
     }
 
     diff_files(ui, from, all, &r);
-    ui.content.set_visible_child_name("detail");
+    reveal(ui, true);
 }
 
 /// A diff's changed files, by class, each leading to its cause.
@@ -785,13 +1019,12 @@ fn diff_files(ui: &Rc<Ui>, from: &str, all: bool, r: &DiffReport) {
 
 /// Asks what undoing a cause would do. Nothing is written by this.
 fn select_undo(ui: &Rc<Ui>, id: i64) {
-    *ui.selected.borrow_mut() = Some(Selected::Undo(id));
-    ui.busy
-        .set_title(&format!("Checking what undoing #{id} would do…"));
-    ui.busy
-        .set_description(Some("Nothing changes until you confirm."));
-    ui.content.set_visible_child_name("busy");
-    ui.split.set_show_content(true);
+    wait_for(
+        ui,
+        Selected::Undo(id),
+        format!("Checking what undoing #{id} would do…"),
+        "Nothing changes until you confirm.",
+    );
     let _ = ui.requests.try_send(Request::UndoPlan(id));
 }
 
@@ -818,14 +1051,18 @@ fn show_undo_plan(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Preview>, F
             return;
         }
     };
-    ui.detail
-        .append(&heading(&format!("Undo #{} {}", p.cause.id, p.cause.label)));
-    let summary = gtk::Label::builder()
-        .label(view::undo_summary(&p))
-        .wrap(true)
-        .xalign(0.0)
-        .selectable(true)
-        .build();
+    ui.detail.append(&page_header(
+        "edit-undo-symbolic",
+        None,
+        &format!("Undo #{}", p.cause.id),
+        &p.cause.label,
+        None,
+    ));
+    let summary = adw::PreferencesGroup::new();
+    let line = action_row(&view::undo_summary(&p), "");
+    line.set_title_selectable(true);
+    line.add_prefix(&gtk::Image::from_icon_name("dialog-information-symbolic"));
+    summary.add(&line);
     ui.detail.append(&summary);
 
     let rows = view::undo_rows(&p);
@@ -864,7 +1101,7 @@ fn show_undo_plan(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Preview>, F
         ui.detail.append(&group);
     }
 
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let buttons = button_row();
     let back = gtk::Button::with_label("Back to the cause");
     back.add_css_class("pill");
     let ui3 = Rc::clone(ui);
@@ -884,7 +1121,7 @@ fn show_undo_plan(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Preview>, F
         buttons.append(&apply);
     }
     ui.detail.append(&buttons);
-    ui.content.set_visible_child_name("detail");
+    reveal(ui, true);
 }
 
 /// The last word before anything is written: polkit then asks for the password.
@@ -911,6 +1148,7 @@ fn confirm_undo(ui: &Rc<Ui>, id: i64, n: usize, digest: &str) {
             return;
         }
         *ui3.selected.borrow_mut() = Some(Selected::Undo(id));
+        *ui3.pending.borrow_mut() = Some(Selected::Undo(id));
         ui3.busy.set_title(&format!("Undoing #{id}…"));
         ui3.busy.set_description(Some(
             "Your system asks for an administrator's password: every undo needs it.",
@@ -941,10 +1179,19 @@ fn show_undone(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Applied>, Fail
     };
     let rows = view::applied_rows(&a);
     let ok = rows.iter().filter(|(_, _, ok)| *ok).count();
-    ui.detail.append(&heading(&format!(
-        "Undone: #{id} ({ok} of {} paths)",
-        rows.len()
-    )));
+    let all_ok = ok == rows.len();
+    ui.detail.append(&page_header(
+        if all_ok {
+            "object-select-symbolic"
+        } else {
+            "dialog-warning-symbolic"
+        },
+        Some(if all_ok { "success" } else { "warning" }),
+        &format!("#{id} undone"),
+        &format!("{ok} of {} paths put back", rows.len()),
+        None,
+    ));
+    toast(ui, &format!("#{id} undone: {ok} of {} paths", rows.len()));
     let mut facts = vec![(
         "Checkpoint first",
         format!("{} (verified before anything was written)", a.pre_undo.name),
@@ -972,10 +1219,11 @@ fn show_undone(ui: &Rc<Ui>, id: i64, r: Result<Box<osreflog_undo::Applied>, Fail
         let open = gtk::Button::with_label(&format!("Open #{cause}, the undo itself"));
         open.set_tooltip_text(Some("Undoing it puts the change back"));
         open.add_css_class("pill");
-        open.set_halign(gtk::Align::Start);
         let ui3 = Rc::clone(ui);
         open.connect_clicked(move |_| select_cause(&ui3, cause));
-        ui.detail.append(&open);
+        let buttons = button_row();
+        buttons.append(&open);
+        ui.detail.append(&buttons);
     }
-    ui.content.set_visible_child_name("detail");
+    reveal(ui, true);
 }

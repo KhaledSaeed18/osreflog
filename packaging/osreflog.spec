@@ -23,7 +23,7 @@ BuildRequires:  libbpf-devel
 BuildRequires:  kernel-headers
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkgconfig(gtk4)
-BuildRequires:  pkgconfig(libadwaita-1) >= 1.5
+BuildRequires:  pkgconfig(libadwaita-1) >= 1.6
 BuildRequires:  desktop-file-utils
 BuildRequires:  appstream
 

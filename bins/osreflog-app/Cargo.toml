@@ -17,7 +17,7 @@ osreflog-bisect.workspace = true
 osreflog-client.workspace = true
 osreflog-model.workspace = true
 osreflog-undo.workspace = true
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_6"] }
 async-channel = "2"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
 tokio.workspace = true
