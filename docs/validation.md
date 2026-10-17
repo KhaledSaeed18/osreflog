@@ -119,7 +119,9 @@ osreflog's first writes to the system, gated before they shipped. [Journal](jour
 - `cargo fmt --check`; `cargo clippy` with warnings as errors (pedantic lints, no `unwrap`, no
   `expect`); the workspace's tests, as COPR's `%check` runs them (no root, no btrfs).
 - Every fuzz target for 30 s, and the version comparison against rpm.
-- The units' systemd exposure, which may only go down (osreflogd 3.6, the boot doctor 4.2 today).
+- The units' systemd exposure, which may only go down (osreflogd 2.4, the boot doctor 2.2 and the
+  user agent 1.0 today).
+- The SELinux module compiles.
 - The D-Bus and polkit policies, the desktop entry and the AppStream metainfo.
 - The spec parses, and its Version and License agree with the workspace and the crates the
   binaries link (`scripts/dist.sh --check`).
@@ -137,5 +139,10 @@ Said here so nobody has to find out the hard way.
   differs from the true state needs real-world data.
 - **Other hardware and layouts.** One laptop, one btrfs layout (Fedora's default). No AMD, no
   NVMe-specific numbers, no LUKS-on-btrfs check yet.
-- **SELinux confinement.** osreflogd runs unconfined; a policy module is part of the hardening
-  still to come.
+- **SELinux confinement of the daemon.** `osreflog-selinux` gives the ledger and runtime files
+  types of their own, but osreflogd itself runs unconfined (`unconfined_service_t`): a domain for
+  a daemon that reads every file and, on undo, writes any of them would mostly be a label. A
+  narrow domain for the undo and summary workers is the next step.
+- **The hardened system units on the real machine.** The user agent's sandbox passed its workload
+  (8/8); the daemon's system call filter and memory setting wait for
+  `scripts/p8/hardening-check.sh`, which runs every check above as root.

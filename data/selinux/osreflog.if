@@ -1,0 +1,21 @@
+## <summary>osreflog: system change history.</summary>
+
+########################################
+## <summary>
+##	Read osreflog's ledger and attic.
+## </summary>
+## <param name="domain">
+##	<summary>
+##	Domain allowed access.
+##	</summary>
+## </param>
+#
+interface(`osreflog_read_lib_files',`
+	gen_require(`
+		type osreflog_var_lib_t;
+	')
+
+	files_search_var_lib($1)
+	list_dirs_pattern($1, osreflog_var_lib_t, osreflog_var_lib_t)
+	read_files_pattern($1, osreflog_var_lib_t, osreflog_var_lib_t)
+')

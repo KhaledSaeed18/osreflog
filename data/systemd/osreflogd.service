@@ -23,7 +23,7 @@ RuntimeDirectory=osreflog
 RuntimeDirectoryMode=0700
 Nice=5
 
-# Hardening that P2 is known to work with; P8 tightens it (system call filter, SELinux).
+# Hardening that P2 is known to work with, tightened in P8f.
 # CAP_SYS_ADMIN: mounts, btrfs ioctls, fanotify filesystem marks; CAP_DAC_READ_SEARCH:
 # open_by_handle_at; CAP_BPF + CAP_PERFMON: the lineage eBPF program; CAP_CHOWN, CAP_FOWNER,
 # CAP_DAC_OVERRIDE: the undo worker (owners, modes and labels of restored files).
@@ -49,7 +49,17 @@ RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+# System call groups osreflogd never uses, refused with EPERM (P8f). An allow-list
+# (@system-service) is too narrow for it: it mounts (@mount), sets owners and capabilities
+# (@privileged) and the workers' rlimits (@resources). @debug is ptrace and perf_event_open:
+# the lineage program attaches through bpf() links, not perf events. The undo and summary
+# workers add their own allow-list filter on top of this one.
+SystemCallFilter=~@clock @cpu-emulation @debug @module @obsolete @raw-io @reboot @swap
+SystemCallErrorNumber=EPERM
 MemoryMax=768M
+# glibc keeps one malloc arena per thread and rarely gives freed memory back: after a few
+# large diffs on the blocking pool the daemon held 108 MB (P8, 2026-10-17). Two arenas bound it.
+Environment=MALLOC_ARENA_MAX=2
 
 [Install]
 WantedBy=multi-user.target system-update.target

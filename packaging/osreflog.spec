@@ -1,4 +1,5 @@
 %global app_id io.github.khaledsaeed18.osreflog
+%global selinuxtype targeted
 
 Name:           osreflog
 Version:        0.2.0
@@ -26,6 +27,8 @@ BuildRequires:  pkgconfig(gtk4)
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.6
 BuildRequires:  desktop-file-utils
 BuildRequires:  appstream
+BuildRequires:  selinux-policy-devel
+BuildRequires:  bzip2
 
 # The dnf hook: a checkpoint before and after every transaction.
 Requires:       libdnf5-plugin-actions
@@ -39,6 +42,8 @@ Recommends:     systemd-container
 Recommends:     qemu-kvm-core
 Recommends:     virtiofsd
 Suggests:       %{name}-app = %{version}-%{release}
+# Its data under types of its own where SELinux is in use.
+Requires:       (%{name}-selinux = %{version}-%{release} if selinux-policy-%{selinuxtype})
 
 %description
 osreflog keeps a history of a btrfs-rooted Fedora system: a read-only snapshot before and after
@@ -59,6 +64,18 @@ Requires:       %{name} = %{version}-%{release}
 A GNOME app to browse the osreflog history, see what changed since a checkpoint, undo a
 change with a preview, and run a bisect step by step.
 
+%package selinux
+Summary:        SELinux types for osreflog's ledger and runtime files
+BuildArch:      noarch
+Requires:       selinux-policy-%{selinuxtype}
+Requires(post): selinux-policy-%{selinuxtype}
+%{?selinux_requires}
+
+%description selinux
+An SELinux module that labels osreflog's ledger, content blobs and attic in /var/lib/osreflog,
+and its runtime directories, with types of their own, so confined services can't read the
+history. The daemon itself keeps running unconfined.
+
 %prep
 %autosetup
 # Build only from the crates vendored into the tarball.
@@ -78,6 +95,8 @@ rm -f rust-toolchain.toml
 export RUSTFLAGS="%{build_rustflags}"
 cargo build --release --frozen --offline \
     -p osreflogd -p osreflog -p osreflog-user -p osreflog-app
+make -C data/selinux -f %{_datadir}/selinux/devel/Makefile osreflog.pp
+bzip2 -9 data/selinux/osreflog.pp
 
 %install
 install -Dpm0755 -t %{buildroot}%{_libexecdir}/%{name} target/release/osreflogd target/release/osreflog-user
@@ -88,6 +107,8 @@ install -Dpm0644 -t %{buildroot}%{_userunitdir} data/systemd/osreflog-user.servi
 install -Dpm0644 -t %{buildroot}%{_datadir}/dbus-1/system.d data/dbus/*.conf
 install -Dpm0644 -t %{buildroot}%{_datadir}/polkit-1/actions data/polkit/*.policy
 install -Dpm0644 -t %{buildroot}%{_sysconfdir}/dnf/libdnf5-plugins/actions.d data/dnf/osreflog.actions
+install -Dpm0644 -t %{buildroot}%{_datadir}/selinux/packages/%{selinuxtype} data/selinux/osreflog.pp.bz2
+install -Dpm0644 -t %{buildroot}%{_datadir}/selinux/devel/include/distributed data/selinux/osreflog.if
 
 install -Dpm0644 -t %{buildroot}%{_datadir}/applications data/app/%{app_id}.desktop
 install -Dpm0644 -t %{buildroot}%{_metainfodir} data/app/%{app_id}.metainfo.xml
@@ -115,6 +136,20 @@ cargo test --release --frozen --offline --workspace --exclude osreflog-fuzz
 %systemd_postun osreflog-boot-doctor.service
 %systemd_user_postun_with_restart osreflog-user.service
 
+%pre selinux
+%selinux_relabel_pre -s %{selinuxtype}
+
+%post selinux
+%selinux_modules_install -s %{selinuxtype} %{_datadir}/selinux/packages/%{selinuxtype}/osreflog.pp.bz2
+
+%postun selinux
+if [ $1 -eq 0 ]; then
+    %selinux_modules_uninstall -s %{selinuxtype} osreflog
+fi
+
+%posttrans selinux
+%selinux_relabel_post -s %{selinuxtype}
+
 %files
 %license LICENSE LICENSE.dependencies
 %doc README.md
@@ -137,11 +172,18 @@ cargo test --release --frozen --offline --workspace --exclude osreflog-fuzz
 %{_datadir}/icons/hicolor/scalable/apps/%{app_id}.svg
 %{_datadir}/icons/hicolor/symbolic/apps/%{app_id}-symbolic.svg
 
+%files selinux
+%license LICENSE
+%{_datadir}/selinux/packages/%{selinuxtype}/osreflog.pp.bz2
+%{_datadir}/selinux/devel/include/distributed/osreflog.if
+
 %changelog
 * Sat Oct 17 2026 Khaled Saeed <khaled18saeed@gmail.com> - 0.2.0-1
 - The app: the open row marked, search, page headers, colored line diffs, animated loading,
   toasts, keyboard shortcuts; needs libadwaita 1.6
 - Screenshots in the AppStream metainfo
+- osreflog-selinux: the ledger and runtime files under types of their own
+- Units: system call filters; the user agent sandboxed (exposure 8.0 to 1.0)
 
 * Fri Oct 16 2026 Khaled Saeed <khaled18saeed@gmail.com> - 0.1.0-1
 - First release: checkpoints around every dnf transaction and on a schedule, changes tied to

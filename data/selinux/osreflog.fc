@@ -1,0 +1,3 @@
+/var/lib/osreflog(/.*)?		gen_context(system_u:object_r:osreflog_var_lib_t,s0)
+/run/osreflog(/.*)?		gen_context(system_u:object_r:osreflog_runtime_t,s0)
+/run/osreflog-boot-doctor(/.*)?	gen_context(system_u:object_r:osreflog_runtime_t,s0)

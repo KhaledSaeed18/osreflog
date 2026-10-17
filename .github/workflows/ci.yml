@@ -68,12 +68,17 @@ jobs:
       - run: >-
           dnf install -y --setopt=install_weak_deps=False
           systemd libxml2 desktop-file-utils appstream rpm-build rust cargo git-core python3
-      # A ratchet: each unit may only get better than its score today (osreflogd 3.6, the boot
-      # doctor 4.2: both run as root by design). Lower these as the hardening lands.
+          selinux-policy-devel make
+      # A ratchet: each unit may only get better than its score today (osreflogd 2.4 and the
+      # boot doctor 2.2, both root by design; the user agent 1.0). Lower these as it improves.
       - name: Unit exposure doesn't get worse
         run: |
-          systemd-analyze security --offline=yes --threshold=36 data/systemd/osreflogd.service
-          systemd-analyze security --offline=yes --threshold=42 data/systemd/osreflog-boot-doctor.service
+          systemd-analyze security --offline=yes --threshold=24 data/systemd/osreflogd.service
+          systemd-analyze security --offline=yes --threshold=22 data/systemd/osreflog-boot-doctor.service
+          systemd-analyze security --offline=yes --user --threshold=10 data/systemd/osreflog-user.service
+      - name: The SELinux module compiles
+        working-directory: data/selinux
+        run: make -f /usr/share/selinux/devel/Makefile osreflog.pp
       - name: D-Bus and polkit policies are well-formed
         run: xmllint --noout data/dbus/*.conf data/polkit/*.policy
       - name: The desktop entry and AppStream metainfo are valid

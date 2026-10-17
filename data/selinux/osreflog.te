@@ -1,0 +1,21 @@
+policy_module(osreflog, 0.2.0)
+
+########################################
+#
+# osreflog's own data, under types of its own.
+#
+# The ledger keeps the content of changed config files (secrets never) and the attic keeps
+# every version undo replaced: as var_lib_t, any confined service allowed to read /var/lib
+# could read them. Under these types only unconfined domains can: osreflogd itself (it runs as
+# unconfined_service_t: a daemon that reads every file and, when asked, writes any of them
+# would gain little from a domain of its own), and an administrator. The CLI and the app read
+# through the daemon over D-Bus, never the files.
+#
+
+## <desc><p>The ledger, content blobs and attic in /var/lib/osreflog.</p></desc>
+type osreflog_var_lib_t;
+files_type(osreflog_var_lib_t)
+
+## <desc><p>osreflogd's runtime directories in /run.</p></desc>
+type osreflog_runtime_t;
+files_pid_file(osreflog_runtime_t)

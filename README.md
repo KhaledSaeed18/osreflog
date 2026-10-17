@@ -121,6 +121,7 @@ osreflog writes to your system only when you ask it to undo something, and it bo
 - **Probes are throwaway copies.** Bisect runs each test in an ephemeral container or a VM booting the copy's own kernel. A reboot into a copy on real hardware is a one-shot boot entry: the default entry is checked untouched after every probe, and a hung probe falls back to it on the next power cycle ([recovery](docs/recovery.md)).
 - **Secrets are never stored.** Files such as `/etc/shadow`, Wi-Fi and VPN credentials and private keys are recorded as changed, with a hash, never their content; `password=`-style keys in config diffs and secrets in command lines are redacted ([threat model](docs/threat-model.md)).
 - **A tamper-evident history.** The ledger is hash-chained; `osreflog verify` re-checks it.
+- **Sandboxed services.** The daemon keeps only the capabilities its job needs and refuses system calls it never makes; the settings agent sees your home read-only, has no network and no capabilities; under SELinux the history has types of its own that confined services can't read.
 
 ## How it works
 

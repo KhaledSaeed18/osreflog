@@ -24,6 +24,19 @@ The app grows up, and the project gets its release machinery.
 - Long commands no longer wrap to three lines in the lists; the full text is in the tooltip.
 - Needs libadwaita 1.6 or newer.
 
+### Hardening
+
+- `osreflogd` and the boot doctor refuse the system call groups they never use (clock setting,
+  ptrace and perf events, kernel modules, raw I/O, reboot, swap, obsolete calls). systemd's
+  exposure score: 3.6 → 2.4 and 4.2 → 2.2.
+- The settings agent (`osreflog-user`) is sandboxed: read-only system and home except its own
+  ledger, no network, no capabilities, a system call allow-list. Exposure 8.0 → 1.0.
+- A new package, `osreflog-selinux`: the ledger, blobs and attic in `/var/lib/osreflog`, and the
+  runtime directories, under SELinux types of their own, so confined services can't read the
+  history. Installed with `osreflog` wherever SELinux is in use.
+- `MALLOC_ARENA_MAX=2` for the daemon: after a day of large diffs it held 108 MB of freed memory
+  in per-thread arenas.
+
 ### Project
 
 - The README is the project's front page: git's tools mapped to osreflog's, a tour with real
@@ -31,7 +44,7 @@ The app grows up, and the project gets its release machinery.
 - CI on every push, on Fedora 44: build, clippy with warnings as errors, the tests, a 30-second
   run of every fuzz target, the units' systemd exposure (it may only get better), the D-Bus and
   polkit policies, the desktop entry and metainfo, the spec against the workspace, and
-  `cargo deny`.
+  `cargo deny`; the SELinux module compiles.
 - Releases are built by CI from the tag: the source tarball, the SRPM and the RPMs, attached to
   the GitHub release.
 - `scripts/screenshots.sh` captures the README's screenshots from real history, off-screen.
