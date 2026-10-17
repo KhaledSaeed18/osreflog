@@ -3,7 +3,8 @@
 <p align="center"><b>A reflog for your Linux system.</b><br>See what changed, what changed it, undo it, and bisect the change that broke things.</p>
 
 <p align="center">
-  <a href="https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/"><img alt="Fedora COPR" src="https://img.shields.io/badge/Fedora%2044-COPR-51A2DA?logo=fedora&logoColor=white"></a>
+  <a href="https://github.com/KhaledSaeed18/osreflog/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/KhaledSaeed18/osreflog?color=E07A2E&label=release"></a>
+  <a href="https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/"><img alt="Fedora COPR" src="https://img.shields.io/badge/Fedora%2044%20%7C%2045-COPR-51A2DA?logo=fedora&logoColor=white"></a>
   <img alt="btrfs root" src="https://img.shields.io/badge/root-btrfs-E07A2E">
   <img alt="GNOME app" src="https://img.shields.io/badge/GNOME-libadwaita-4A86CF?logo=gnome&logoColor=white">
   <a href="https://github.com/KhaledSaeed18/osreflog/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/KhaledSaeed18/osreflog/actions/workflows/ci.yml/badge.svg"></a>
@@ -160,7 +161,7 @@ On the development laptop (Fedora 44, i7-8550U, SATA disk). Every number has a s
 
 ## Install
 
-Fedora 44 Workstation with `/` on btrfs (the default layout), x86_64, from [COPR](https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/):
+Fedora Workstation with `/` on btrfs (the default layout), x86_64, from [COPR](https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/):
 
 ```bash
 sudo dnf copr enable khaledsaeed18/osreflog
@@ -170,16 +171,7 @@ systemctl --user enable --now osreflog-user.service
 osreflog doctor
 ```
 
-The app is **osreflog** in the app grid. The services follow Fedora's presets, so they are enabled by hand once; updates arrive with `dnf upgrade`.
-
-From source:
-
-```bash
-cargo build --release
-sudo scripts/install-dev.sh      # --uninstall to remove; the history is kept
-osreflog doctor
-cargo run --release -p osreflog-app
-```
+The app is **osreflog** in the app grid. The services follow Fedora's presets, so they are enabled by hand once; updates arrive with `dnf upgrade`. Fedora 44, 45 and rawhide are built; the [release RPMs](https://github.com/KhaledSaeed18/osreflog/releases), building from source and removing osreflog are in [Installing](docs/install.md), and common problems in [Troubleshooting](docs/troubleshooting.md).
 
 ### Scope
 
@@ -187,7 +179,10 @@ One btrfs filesystem for `/` on Fedora (Workstation's default since Fedora 33). 
 
 ## Documentation
 
-Start at [docs/README.md](docs/README.md): the vision, the architecture, how capture, undo and bisect work, the threat model, and one journal entry per phase with what worked, what broke and the numbers.
+- [Installing](docs/install.md) and [Troubleshooting](docs/troubleshooting.md)
+- [Validation](docs/validation.md): every claim, the check behind it and its last result
+- [Contributing](CONTRIBUTING.md): building, testing, the rules, releases; [Changelog](CHANGELOG.md)
+- [docs/README.md](docs/README.md): the vision, the architecture, how capture, undo and bisect work, the threat model, and one journal entry per phase with what worked, what broke and the numbers
 
 ## License
 

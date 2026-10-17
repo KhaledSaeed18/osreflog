@@ -19,6 +19,8 @@
 | 8 | [environment.md](./environment.md) | This host's facts and expected friction |
 | 9 | [open-questions.md](./open-questions.md) | Open questions with the phase that answers each, and resolved ones |
 | 10 | [validation.md](./validation.md) | Every claim, the check behind it, its last result and the command to run it again |
+| 11 | [install.md](./install.md) | Requirements, COPR, release RPMs, from source, removing it and its history |
+| 12 | [troubleshooting.md](./troubleshooting.md) | Symptoms, why they happen, what to do |
 
 ## Folders
 
