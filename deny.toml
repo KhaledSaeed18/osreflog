@@ -7,18 +7,23 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # zbus 5's own parts, unmaintained as separate crates since they moved into zbus 6
+    # ("unmaintained", not a vulnerability). Goes away with the move to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; osreflog is on zbus 5" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; osreflog is on zbus 5" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; osreflog is on zbus 5" },
+]
 
 [licenses]
 version = 2
 # Each one lets the combined work be distributed under GPL-3.0-or-later. The spec's License tag
 # is computed from the crates the binaries actually link (scripts/dist.sh --check).
 allow = [
-    "GPL-3.0-or-later",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
     "MIT-0",
-    "BSD-2-Clause",
     "0BSD",
     "Zlib",
     "Unicode-3.0",
@@ -35,6 +40,8 @@ ignore = true
 # aya, zbus and gtk-rs pull a few crates in two versions; say so, don't fail.
 multiple-versions = "warn"
 wildcards = "deny"
+# The workspace's own crates, by path (never published).
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

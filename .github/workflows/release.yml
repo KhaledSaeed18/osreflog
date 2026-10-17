@@ -1,0 +1,74 @@
+name: Release
+
+# A GitHub release from a version tag: the source tarball (crates vendored), the SRPM and the
+# RPMs built on Fedora 44 the way COPR builds them, a SHA256SUMS file, and the notes from that
+# version's section of CHANGELOG.md.
+#
+#   git tag -a v0.2.0 -m "osreflog 0.2.0" && git push origin v0.2.0
+#
+# For a tag made before this workflow existed: Actions → Release → Run workflow, with the tag.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      # This workflow's own commit, for CHANGELOG.md; the tagged tree, to build.
+      - uses: actions/checkout@v5
+        with:
+          path: tools
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+          path: src
+      - run: >-
+          dnf install -y --setopt=install_weak_deps=False
+          rust cargo gcc clang libbpf-devel kernel-headers gtk4-devel libadwaita-devel
+          rpm-build systemd-rpm-macros desktop-file-utils appstream git-core python3 gh
+      # As a user, not root: COPR's mock builds (and runs %check) as one, and some tests
+      # expect a permission to be refused.
+      - name: Build the tarball, the SRPM and the RPMs
+        run: |
+          useradd -m builder
+          chown -R builder src
+          su builder -c 'git config --global --add safe.directory "*" && cd src && scripts/dist.sh --rpm'
+      - name: Notes from CHANGELOG.md
+        run: |
+          version=${TAG#v}
+          python3 -I - "$version" tools/CHANGELOG.md >notes.md <<'PY'
+          import re, sys
+          version, path = sys.argv[1], sys.argv[2]
+          text = open(path, encoding="utf-8").read()
+          m = re.search(rf"^## {re.escape(version)} \(.*?\)\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+          if not m:
+              sys.exit(f"CHANGELOG.md has no section for {version}")
+          print(m.group(1).strip())
+          print("\nInstall on Fedora 44 from COPR: `sudo dnf copr enable khaledsaeed18/osreflog && sudo dnf install osreflog osreflog-app` (then see the README).")
+          PY
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config --global --add safe.directory "*"
+          mkdir assets
+          cp src/target/dist/*.tar.gz src/target/dist/rpmbuild/SRPMS/*.rpm src/target/dist/rpmbuild/RPMS/*/*.rpm assets/
+          (cd assets && sha256sum * >SHA256SUMS)
+          ls -l assets
+          cd src
+          gh release create "$TAG" ../assets/* --verify-tag \
+            --title "osreflog ${TAG#v}" --notes-file ../notes.md
