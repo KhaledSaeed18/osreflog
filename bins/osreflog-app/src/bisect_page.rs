@@ -478,6 +478,11 @@ fn render_session(ui: &Rc<Ui>, s: Option<&Status>) {
             };
             let w = file_row(title, subtitle, &lines, false);
             let image = gtk::Image::from_icon_name(icon);
+            image.add_css_class(match *icon {
+                "object-select-symbolic" => "success",
+                "process-stop-symbolic" => "error",
+                _ => "dim-label",
+            });
             if let Some(a) = w.downcast_ref::<adw::ActionRow>() {
                 a.add_prefix(&image);
             } else if let Some(e) = w.downcast_ref::<adw::ExpanderRow>() {

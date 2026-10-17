@@ -27,6 +27,24 @@
   <url type="homepage">https://github.com/KhaledSaeed18/osreflog</url>
   <url type="bugtracker">https://github.com/KhaledSaeed18/osreflog/issues</url>
   <url type="vcs-browser">https://github.com/KhaledSaeed18/osreflog</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>A cause: the command that ran, the process, and the file it changed</caption>
+      <image>https://raw.githubusercontent.com/KhaledSaeed18/osreflog/main/docs/images/screenshots/cause-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Undo, previewed before anything is written</caption>
+      <image>https://raw.githubusercontent.com/KhaledSaeed18/osreflog/main/docs/images/screenshots/undo-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>What changed since a checkpoint</caption>
+      <image>https://raw.githubusercontent.com/KhaledSaeed18/osreflog/main/docs/images/screenshots/since-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A finished bisect and the cause it found</caption>
+      <image>https://raw.githubusercontent.com/KhaledSaeed18/osreflog/main/docs/images/screenshots/bisect-light.png</image>
+    </screenshot>
+  </screenshots>
   <provides>
     <binary>osreflog-app</binary>
   </provides>

@@ -56,6 +56,21 @@ pub fn subtitle(c: &Cause) -> String {
     s
 }
 
+/// The style class for one line of a line diff: "error" for a removed line, "success" for an
+/// added one, "dim-label" for a hunk header; none for anything else.
+#[must_use]
+pub fn line_tone(line: &str) -> Option<&'static str> {
+    if line.starts_with("@@") {
+        Some("dim-label")
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        Some("error")
+    } else if line.starts_with('+') && !line.starts_with("+++") {
+        Some("success")
+    } else {
+        None
+    }
+}
+
 /// Whether a cause matches what was typed in the search: every word of `query`, ignoring case,
 /// is in its label, kind, process name, command or `#id`. An empty query matches everything.
 #[must_use]
@@ -1305,6 +1320,15 @@ mod tests {
         s.live = None;
         s.checkpoints = 140;
         assert_eq!(status_short(&s), "checkpoints only · 140 checkpoints");
+    }
+
+    #[test]
+    fn diff_lines_get_their_tone() {
+        assert_eq!(line_tone("@@ -1,1 +1,1 @@"), Some("dim-label"));
+        assert_eq!(line_tone("-x = 1"), Some("error"));
+        assert_eq!(line_tone("+ mode = broken"), Some("success"));
+        assert_eq!(line_tone("--- a"), None);
+        assert_eq!(line_tone("x: 1 → 2"), None);
     }
 
     #[test]

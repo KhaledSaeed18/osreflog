@@ -389,35 +389,11 @@ fn build(app: &adw::Application) {
         }
     });
     let _ = requests.try_send(Request::Refresh);
-    // Development: open a page at start, `since:c000134`, `cause:765`, `search:<text>`, `undo:765`, `bisect:session`
-    // or `bisect:new` (input through GTK's
-    // Broadway backend, used to look at the window from a browser, drops clicks).
+    // Development: open pages at start (`open_at_start`).
     if let Ok(open) = std::env::var("OSREFLOG_APP_OPEN") {
-        match open.split_once(':') {
-            Some(("since", name)) => select_diff(&ui, name, NOW, false),
-            Some(("search", query)) => ui.search.set_text(query),
-            Some(("cause", id)) => {
-                if let Ok(id) = id.parse() {
-                    select_cause(&ui, id);
-                }
-            }
-            Some(("bisect", "session")) => {
-                ui.views.set_visible_child_name("bisect");
-                bisect_page::select_session(&ui);
-            }
-            Some(("bisect", "new")) => {
-                // The form needs the checkpoint names: build it once the first history is in.
-                let ui5 = Rc::clone(&ui);
-                glib::timeout_add_seconds_local_once(2, move || bisect_page::show_form(&ui5));
-            }
-            Some(("undo", id)) => {
-                if let Ok(id) = id.parse() {
-                    select_undo(&ui, id);
-                }
-            }
-            _ => eprintln!(
-                "osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint>, cause:<id>, search:<text>, undo:<id>, bisect:session or bisect:new"
-            ),
+        // Several at once, comma-separated: `search:p8c,cause:774`.
+        for item in open.split(',') {
+            open_at_start(&ui, item);
         }
     }
     let ui4 = Rc::clone(&ui);
@@ -430,6 +406,88 @@ fn build(app: &adw::Application) {
         glib::ControlFlow::Continue
     });
     window.present();
+    // Development: `OSREFLOG_APP_SCREENSHOT=out.png` saves the window as it is after a few
+    // seconds (`OSREFLOG_APP_SCREENSHOT_AFTER`, default 4) and quits: the README's screenshots
+    // (`scripts/screenshots.sh`). Animations are off: on a display nobody watches (Broadway with
+    // no browser attached) the frame clock doesn't run, and a fade would never end.
+    if let Ok(path) = std::env::var("OSREFLOG_APP_SCREENSHOT") {
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_enable_animations(false);
+        }
+        let scale: f32 = std::env::var("OSREFLOG_APP_SCREENSHOT_SCALE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0);
+        let after = std::env::var("OSREFLOG_APP_SCREENSHOT_AFTER")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+        glib::timeout_add_seconds_local_once(after, move || {
+            if let Err(e) = save_png(&window, &path, scale) {
+                eprintln!("osreflog-app: screenshot {path}: {e}");
+            }
+            if let Some(app) = window.application() {
+                app.quit();
+            }
+        });
+    }
+}
+
+/// Renders the window, as drawn now, to a PNG, `scale` times its size.
+fn save_png(window: &adw::ApplicationWindow, path: &str, scale: f32) -> Result<(), String> {
+    let paintable = gtk::WidgetPaintable::new(Some(window));
+    let (w, h) = (f64::from(window.width()), f64::from(window.height()));
+    let snapshot = gtk::Snapshot::new();
+    paintable.snapshot(&snapshot, w, h);
+    let node = snapshot.to_node().ok_or("nothing drawn yet")?;
+    let renderer = window.renderer().ok_or("no renderer")?;
+    let texture = if scale > 1.0 {
+        let big = gtk::Snapshot::new();
+        big.scale(scale, scale);
+        big.append_node(&node);
+        renderer.render_texture(big.to_node().ok_or("nothing drawn")?, None)
+    } else {
+        renderer.render_texture(node, None)
+    };
+    texture.save_to_png(path).map_err(|e| e.to_string())
+}
+
+/// One `OSREFLOG_APP_OPEN` item: a page to open at start (input through GTK's Broadway backend,
+/// used to look at the window from a browser, drops clicks).
+fn open_at_start(ui: &Rc<Ui>, item: &str) {
+    match item.split_once(':') {
+        Some(("since", name)) => {
+            ui.views.set_visible_child_name("checkpoints");
+            select_diff(ui, name, NOW, false);
+        }
+        Some(("search", query)) => {
+            ui.search.set_text(query);
+            ui.search.set_position(-1);
+        }
+        Some(("cause", id)) => {
+            if let Ok(id) = id.parse() {
+                select_cause(ui, id);
+            }
+        }
+        Some(("bisect", "session")) => {
+            ui.views.set_visible_child_name("bisect");
+            bisect_page::select_session(ui);
+        }
+        Some(("bisect", "new")) => {
+            // The form needs the checkpoint names: build it once the first history is in.
+            ui.views.set_visible_child_name("bisect");
+            let ui5 = Rc::clone(ui);
+            glib::timeout_add_seconds_local_once(2, move || bisect_page::show_form(&ui5));
+        }
+        Some(("undo", id)) => {
+            if let Ok(id) = id.parse() {
+                select_undo(ui, id);
+            }
+        }
+        _ => eprintln!(
+            "osreflog-app: OSREFLOG_APP_OPEN items are since:<checkpoint>, cause:<id>, search:<text>, undo:<id>, bisect:session or bisect:new"
+        ),
+    }
 }
 
 /// Ctrl+F searches the causes; F5 or Ctrl+R asks for news now instead of at the next refresh.
@@ -794,20 +852,33 @@ fn file_row(title: &str, subtitle: &str, summary: &[String], expanded: bool) -> 
     row.set_title(title);
     row.set_subtitle(subtitle);
     row.set_expanded(expanded);
-    let text = gtk::Label::builder()
-        .label(summary.join("\n"))
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .selectable(true)
-        .margin_top(8)
-        .margin_bottom(8)
-        .margin_start(12)
-        .margin_end(12)
-        .build();
-    text.add_css_class("monospace");
-    row.add_row(&text);
+    row.add_row(&summary_text(summary));
     row.upcast()
+}
+
+/// Summary lines in monospace; in a line diff, removed lines red, added lines green, hunk
+/// headers dimmed.
+fn summary_text(summary: &[String]) -> gtk::Box {
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    text.set_margin_top(8);
+    text.set_margin_bottom(8);
+    text.set_margin_start(12);
+    text.set_margin_end(12);
+    for line in summary.iter().flat_map(|s| s.lines()) {
+        let l = gtk::Label::builder()
+            .label(line)
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .selectable(true)
+            .build();
+        l.add_css_class("monospace");
+        if let Some(class) = view::line_tone(line) {
+            l.add_css_class(class);
+        }
+        text.append(&l);
+    }
+    text
 }
 
 fn show_detail(ui: &Rc<Ui>, id: i64, r: Result<CauseDetail, Failure>) {

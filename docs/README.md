@@ -2,7 +2,7 @@
 
 > A reflog for your Linux system: see what changed, who changed it, and bisect the change that broke it.
 
-**Status:** P8 (GNOME app, packaging, hardening) next; P7 closed 2026-10-16 ([journal](./journal/p7-metal.md)): after the boot gate passed in a Secure Boot test VM, a metal bisect on this laptop found the change that switched Wi-Fi power save on, in 3 probes, the default boot entry untouched throughout. Last updated 2026-10-16.
+**Status:** P8 (GNOME app, packaging, hardening): the app, its undo and bisect pages, and RPM packaging in [COPR](https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/) are done ([journal](./journal/p8-app.md)); hardening (system call filters, an SELinux policy) is next. Last updated 2026-10-17.
 
 ## Reading order
 
