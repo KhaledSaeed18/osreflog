@@ -1,6 +1,6 @@
 # P8: GNOME app, packaging, hardening
 
-- Status: **P8a–P8d done**; P8e (packaging) next
+- Status: **P8a–P8e done** (P8e installed from COPR on a fresh Fedora 44); P8f (hardening) next
 - Started: 2026-10-16
 - Roadmap: [P8](../roadmap.md#p8-gnome-app-packaging-hardening)
 - Exit: installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
@@ -115,3 +115,10 @@ GNOME Software's offline update ran (kernel 7.2.9 → 7.2.10, 7.1.6 removed, Fir
 - **COPR** ([khaledsaeed18/osreflog](https://copr.fedorainfracloud.org/coprs/khaledsaeed18/osreflog/), fedora-44-x86_64, Fedora's Rust 1.99): the first build failed in `%check`. `seeds_from_proc` wanted more than 10 processes in `/proc`, and mock's PID namespace has a handful. It now checks only that the table has the test's own process. Every test then passed in a PID and network namespace of their own (`unshare --pid --net`, as mock runs them), and build 11160993 succeeded.
 - **Installed from COPR on a fresh Fedora 44** (2026-10-17, `scripts/p8/coprvm.sh`: Fedora's Cloud Base 44 image, btrfs with `root`, `home`, `var` and `boot` subvolumes, cloud-init, two boots). `dnf copr enable` and `dnf install osreflog osreflog-app` worked and `rpm -V` was clean. The units were disabled by the presets, as expected, and enabled by hand. The doctor gave 5 ok. `dnf install figlet` got its pre-dnf and post-dnf checkpoints and a cause with 360 package paths. `systemd-analyze security` rated osreflogd 3.6 ("OK"). After the reboot, the boot doctor and osreflogd started at boot and took the boot checkpoint. `dnf remove figlet` got its own pair of checkpoints. `verify` passed on 21 chain entries, and the doctor again gave 5 ok. The journal had one warning, the expected witness gap across the reboot. On the way, two bugs in the harness, not osreflog: a login prompt on ttyS0 hung up the test's writes to the same port (the test now writes to a virtio port of its own), and the test unit's `After=cloud-final.service` made an ordering cycle at the second boot.
 - **P8 exit**: installable from COPR on a fresh Fedora 44 VM with a clean doctor: **met**. The app showing a real week of history: still to come (the laptop's history keeps growing).
+
+### 2026-10-17: the timeline's rough edges
+
+- **Long commands** no longer wrap to three lines: cause and checkpoint rows keep their title and subtitle to one line each, ellipsized, with the whole text in the row's tooltip.
+- **The status line** in the sidebar's title is now short ("recording · 139 checkpoints"); the full line (last checkpoint, its time and reason) is its tooltip.
+- **Search**: a search box above the causes keeps the ones whose label, kind, process name, command or `#id` holds every word typed, ignoring case; "No matching causes" when none does. The filter holds across the 5 s refresh. `view::matches`, `view::status_short`: 9 tests in all. Development hook: `OSREFLOG_APP_OPEN=search:<text>`.
+- **Seen against the real daemon** (Broadway): `search:dnf` listed the dnf transactions and the `sudo sh -c dnf install …` commands, one line each; `search:zzqq` showed the empty page, still there after a refresh.

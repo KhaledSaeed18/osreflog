@@ -93,6 +93,9 @@ struct Ui {
     names: RefCell<Vec<String>>,
     /// What the two lists show now, so an unchanged refresh doesn't rebuild them.
     shown_causes: Shown<i64>,
+    /// The causes as last read, and the search over them.
+    causes: RefCell<Vec<osreflog_model::Cause>>,
+    search: gtk::SearchEntry,
     shown_checkpoints: Shown<(String, bool)>,
     /// The sidebar's Bisect view, the session as last read, and as the session page shows it.
     bisect_side: gtk::Box,
@@ -143,8 +146,17 @@ fn build(app: &adw::Application) {
     let checkpoints = page_box();
     let bisect_side = page_box();
     let views = adw::ViewStack::new();
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search causes")
+        .margin_top(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    let causes_view = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    causes_view.append(&search);
+    causes_view.append(&scrolled(&timeline));
     views.add_titled_with_icon(
-        &scrolled(&timeline),
+        &causes_view,
         Some("causes"),
         "Causes",
         "document-open-recent-symbolic",
@@ -254,10 +266,18 @@ fn build(app: &adw::Application) {
         selected: RefCell::new(None),
         names: RefCell::new(Vec::new()),
         shown_causes: RefCell::new(None),
+        causes: RefCell::new(Vec::new()),
+        search: search.clone(),
         shown_checkpoints: RefCell::new(None),
         bisect_side,
         bisect_status: RefCell::new(None),
         shown_session: RefCell::new(None),
+    });
+
+    let ui4 = Rc::clone(&ui);
+    ui.search.connect_search_changed(move |_| {
+        let causes = ui4.causes.borrow().clone();
+        show_causes(&ui4, &causes, &day_of(0));
     });
 
     let ui2 = Rc::clone(&ui);
@@ -301,12 +321,13 @@ fn build(app: &adw::Application) {
         }
     });
     let _ = requests.try_send(Request::Refresh);
-    // Development: open a page at start, `since:c000134`, `cause:765`, `undo:765`, `bisect:session`
+    // Development: open a page at start, `since:c000134`, `cause:765`, `search:<text>`, `undo:765`, `bisect:session`
     // or `bisect:new` (input through GTK's
     // Broadway backend, used to look at the window from a browser, drops clicks).
     if let Ok(open) = std::env::var("OSREFLOG_APP_OPEN") {
         match open.split_once(':') {
             Some(("since", name)) => select_diff(&ui, name, NOW, false),
+            Some(("search", query)) => ui.search.set_text(query),
             Some(("cause", id)) => {
                 if let Ok(id) = id.parse() {
                     select_cause(&ui, id);
@@ -324,7 +345,7 @@ fn build(app: &adw::Application) {
                 }
             }
             _ => eprintln!(
-                "osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint>, cause:<id>, undo:<id>, bisect:session or bisect:new"
+                "osreflog-app: OSREFLOG_APP_OPEN is since:<checkpoint>, cause:<id>, search:<text>, undo:<id>, bisect:session or bisect:new"
             ),
         }
     }
@@ -396,14 +417,16 @@ fn show_history(ui: &Rc<Ui>, r: Result<Box<History>, Failure>) {
                 ui.down.set_description(Some(&f.message));
             }
             ui.title.set_subtitle("");
+            ui.title.set_tooltip_text(None);
             ui.sidebar.set_visible_child_name("down");
             *ui.shown_causes.borrow_mut() = None;
             *ui.shown_checkpoints.borrow_mut() = None;
             return;
         }
     };
+    ui.title.set_subtitle(&view::status_short(&status));
     ui.title
-        .set_subtitle(&view::status_line(&status, local_full));
+        .set_tooltip_text(Some(&view::status_line(&status, local_full)));
     let today = day_of(0);
     show_causes(ui, &causes, &today);
     show_checkpoints(ui, &log, &today);
@@ -423,14 +446,43 @@ fn time_suffix(text: &str) -> gtk::Label {
     time
 }
 
+/// A list row on one line each for the title and the subtitle, the whole text in its tooltip:
+/// long commands otherwise wrap to three lines.
+fn list_row(title: &str, subtitle: &str) -> adw::ActionRow {
+    let r = action_row(title, subtitle);
+    r.set_title_lines(1);
+    r.set_subtitle_lines(1);
+    r.set_tooltip_text(Some(&format!("{title}\n{subtitle}")));
+    r
+}
+
 fn show_causes(ui: &Rc<Ui>, causes: &[osreflog_model::Cause], today: &str) {
-    let key = (causes.iter().map(|c| c.id).collect(), today.to_owned());
+    if ui.causes.borrow().as_slice() != causes {
+        *ui.causes.borrow_mut() = causes.to_vec();
+    }
+    let query = ui.search.text().to_string();
+    let found: Vec<_> = causes
+        .iter()
+        .filter(|c| view::matches(c, &query))
+        .cloned()
+        .collect();
+    let key = (
+        found.iter().map(|c| c.id).collect(),
+        format!("{today}\n{query}"),
+    );
     if ui.shown_causes.borrow().as_ref() == Some(&key) {
         return;
     }
     clear(&ui.timeline);
-    let days = view::days(causes, local, today, &day_of(-1));
-    if days.is_empty() {
+    let days = view::days(&found, local, today, &day_of(-1));
+    if days.is_empty() && !query.trim().is_empty() {
+        let empty = adw::StatusPage::builder()
+            .icon_name("edit-find-symbolic")
+            .title("No matching causes")
+            .description("The search looks in each cause's label, kind, process and command.")
+            .build();
+        ui.timeline.append(&empty);
+    } else if days.is_empty() {
         let empty = adw::StatusPage::builder()
             .icon_name("document-open-recent-symbolic")
             .title("No causes yet")
@@ -441,7 +493,7 @@ fn show_causes(ui: &Rc<Ui>, causes: &[osreflog_model::Cause], today: &str) {
     for day in days {
         let group = adw::PreferencesGroup::builder().title(&day.label).build();
         for row in day.rows {
-            let r = action_row(&row.title, &row.subtitle);
+            let r = list_row(&row.title, &row.subtitle);
             r.set_activatable(true);
             r.add_prefix(&gtk::Image::from_icon_name(row.icon));
             r.add_suffix(&time_suffix(&row.time));
@@ -470,7 +522,7 @@ fn show_checkpoints(ui: &Rc<Ui>, log: &[LogEntry], today: &str) {
     for (label, rows) in view::checkpoint_days(log, local, today, &day_of(-1)) {
         let group = adw::PreferencesGroup::builder().title(&label).build();
         for row in rows {
-            let r = action_row(&row.title, &row.subtitle);
+            let r = list_row(&row.title, &row.subtitle);
             r.set_activatable(true);
             r.add_prefix(&gtk::Image::from_icon_name(row.icon));
             r.add_suffix(&time_suffix(&row.time));

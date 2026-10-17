@@ -56,6 +56,25 @@ pub fn subtitle(c: &Cause) -> String {
     s
 }
 
+/// Whether a cause matches what was typed in the search: every word of `query`, ignoring case,
+/// is in its label, kind, process name, command or `#id`. An empty query matches everything.
+#[must_use]
+pub fn matches(c: &Cause, query: &str) -> bool {
+    let hay = format!(
+        "#{} {} {} {} {}",
+        c.id,
+        c.label,
+        c.kind,
+        c.actor.comm,
+        c.actor.command.join(" ")
+    )
+    .to_lowercase();
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|w| hay.contains(w))
+}
+
 /// Groups `causes` (newest first) by local day. `local(ms)` gives the day ("2026-10-16") and
 /// the time ("14:33") of a timestamp; `today` and `yesterday` are day strings in the same form.
 pub fn days(
@@ -197,6 +216,19 @@ pub fn status_line(s: &Status, local: impl Fn(i64) -> String) -> String {
         ),
         None => format!("{live} · no checkpoint yet"),
     }
+}
+
+/// The status in a few words, for the sidebar's title, where the full line doesn't fit.
+#[must_use]
+pub fn status_short(s: &Status) -> String {
+    let live = match &s.live {
+        Some(l) if l.running => "recording",
+        _ => "checkpoints only",
+    };
+    format!(
+        "{live} · {}",
+        plural(s.checkpoints, "checkpoint", "checkpoints")
+    )
 }
 
 /// "86 config · 33 state · 12267 package", leaving out classes with nothing in them.
@@ -1269,5 +1301,24 @@ mod tests {
             ..LiveStatus::default()
         });
         assert!(status_line(&s, |_| String::new()).starts_with("recording changes"));
+        assert_eq!(status_short(&s), "recording · 1 checkpoint");
+        s.live = None;
+        s.checkpoints = 140;
+        assert_eq!(status_short(&s), "checkpoints only · 140 checkpoints");
+    }
+
+    #[test]
+    fn search_matches_every_word_ignoring_case() {
+        let mut c = cause(42, 0, "command", 1, 0);
+        c.label = "sed -i s/x/y/ /etc/foo.conf".into();
+        c.actor.comm = "sed".into();
+        c.actor.command = vec!["sed".into(), "-i".into(), "/etc/foo.conf".into()];
+        assert!(matches(&c, ""));
+        assert!(matches(&c, "  "));
+        assert!(matches(&c, "FOO.conf"));
+        assert!(matches(&c, "command sed"));
+        assert!(matches(&c, "#42"));
+        assert!(!matches(&c, "#4 dnf"));
+        assert!(!matches(&c, "bar"));
     }
 }
