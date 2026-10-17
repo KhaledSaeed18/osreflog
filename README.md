@@ -182,7 +182,7 @@ One btrfs filesystem for `/` on Fedora (Workstation's default since Fedora 33). 
 
 - [Installing](docs/install.md) and [Troubleshooting](docs/troubleshooting.md)
 - [Validation](docs/validation.md): every claim, the check behind it and its last result; [Performance](docs/performance.md): what it costs
-- [Contributing](CONTRIBUTING.md): building, testing, the rules, releases; [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md): building, testing, the rules, releases; [Changelog](CHANGELOG.md); [Security](SECURITY.md): reporting a vulnerability privately
 - [docs/README.md](docs/README.md): the vision, the architecture, how capture, undo and bisect work, the threat model, and one journal entry per phase with what worked, what broke and the numbers
 
 ## License

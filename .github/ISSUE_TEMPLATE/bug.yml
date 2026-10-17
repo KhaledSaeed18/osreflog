@@ -1,0 +1,35 @@
+name: Something doesn't work
+description: A wrong result, an error, a crash, the app misbehaving
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      placeholder: "1. sudo dnf install …\n2. osreflog why /etc/…"
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `osreflog doctor` and `osreflog status`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: journal
+    attributes:
+      label: The daemon's journal around it
+      description: "`journalctl -u osreflogd -b --no-pager | tail -100`"
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      placeholder: "osreflog 0.2.0 from COPR, Fedora 44, kernel 7.2"
+    validations:
+      required: true

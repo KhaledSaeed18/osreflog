@@ -1,0 +1,14 @@
+name: An idea
+description: Something osreflog should record, show, undo or bisect
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What were you trying to find out or fix?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would have helped

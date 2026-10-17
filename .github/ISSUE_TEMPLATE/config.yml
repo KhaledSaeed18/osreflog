@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A security problem
+    url: https://github.com/KhaledSaeed18/osreflog/security/advisories/new
+    about: Report it privately, please (see SECURITY.md).
+  - name: Troubleshooting
+    url: https://github.com/KhaledSaeed18/osreflog/blob/main/docs/troubleshooting.md
+    about: Common problems and what to do about them.
