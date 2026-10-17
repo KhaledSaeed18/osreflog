@@ -10,6 +10,18 @@ systemctl --user is-active --quiet osreflog-user || {
     echo "osreflog-user isn't running: systemctl --user enable --now osreflog-user" >&2
     exit 1
 }
+# The unit counts as started before the agent has cached dconf and become a monitor, so a
+# write made just after a restart would go unseen: wait for this run to say it's watching.
+RUN=$(systemctl --user show -p InvocationID --value osreflog-user)
+watching() {
+    journalctl --user _SYSTEMD_INVOCATION_ID="$RUN" --grep "watching dconf writes" \
+        -q -o cat --no-pager >/dev/null
+}
+for _ in $(seq 100); do watching && break; sleep 0.1; done
+watching || {
+    echo "osreflog-user didn't start watching within 10 s: journalctl --user -u osreflog-user" >&2
+    exit 1
+}
 OSREFLOG=$(command -v osreflog || echo "$(dirname "$0")/../../target/release/osreflog")
 DIR=/org/osreflog/workload/
 START_MS=$(date +%s%3N)
