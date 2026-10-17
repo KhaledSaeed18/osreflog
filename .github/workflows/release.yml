@@ -29,10 +29,7 @@ jobs:
     steps:
       # git first: without it, actions/checkout downloads a plain copy, and dist.sh needs
       # `git archive`.
-      - run: >-
-          dnf install -y --setopt=install_weak_deps=False
-          rust cargo gcc clang libbpf-devel kernel-headers gtk4-devel libadwaita-devel
-          rpm-build systemd-rpm-macros desktop-file-utils appstream git-core python3 gh
+      - run: dnf install -y --setopt=install_weak_deps=False git-core gh python3 rpm-build dnf5-plugins
       # This workflow's own commit, for CHANGELOG.md; the tagged tree, to build.
       - uses: actions/checkout@v5
         with:
@@ -41,6 +38,8 @@ jobs:
         with:
           ref: ${{ env.TAG }}
           path: src
+      # The spec's BuildRequires, whatever they are at that tag (dist.sh builds with --nodeps).
+      - run: dnf builddep -y --setopt=install_weak_deps=False src/packaging/osreflog.spec
       # As a user, not root: COPR's mock builds (and runs %check) as one, and some tests
       # expect a permission to be refused.
       - name: Build the tarball, the SRPM and the RPMs
