@@ -76,11 +76,19 @@ snapshots in P1, too slow to run on every `status`, and simple quotas are still 
 
 ## Over days
 
-A 48-hour soak test of normal use started on 2026-10-17 18:35:
+The first soak, started 2026-10-17 18:35, measured nothing it set out to: the hardening check
+reinstalled and restarted osreflogd an hour in, and the machine was shut down after 6.1 h,
+which ended the user unit. Its numbers are two daemons glued together (memory "falling" from
+116 MB to 41 MB was the restart, not memory coming back).
+
+The soak now survives both. Samples carry wall-clock times and are appended to one CSV; a
+restarted process starts a new segment; time with the machine off isn't counted; and the run
+is a user unit enabled at login that carries on where it stopped:
 
 ```bash
-systemd-run --user --unit=osreflog-soak scripts/perf/soak.py 172800 60 perf-out/soak-48h.csv
+scripts/perf/soak-unit.sh start     # 48 h sampled, into perf-out/soak.csv
+scripts/perf/soak-unit.sh status    # the table from the samples so far
 ```
 
-It samples both processes' CPU time and memory every minute, with what the daemon recorded
-meanwhile, and writes a summary table next to the CSV. Its results go here when it ends.
+The second run started 2026-10-20 02:09, a few hours after a boot (osreflogd at 15 MB). Its
+table goes here when it ends.
