@@ -490,13 +490,13 @@ pub fn apply(engine: &Engine, id: i64, digest: &str) -> Result<Applied> {
 fn run_worker(engine: &Engine, root: &Path, plan: &Plan) -> Result<osreflog_undo::Report> {
     let exe = std::env::current_exe().map_err(|e| invalid(format!("current_exe: {e}")))?;
     let input = serde_json::to_vec(plan).map_err(|e| invalid(e.to_string()))?;
-    let mut child = Command::new(exe)
-        .arg(WORKER_FLAG)
+    let mut cmd = Command::new(exe);
+    cmd.arg(WORKER_FLAG)
         .arg(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    let mut child = crate::selinux::spawn(&mut cmd, crate::selinux::UNDO_DOMAIN)
         .map_err(|e| invalid(format!("starting the undo worker: {e}")))?;
     let pid = child.id();
     engine.live.lock_brackets().undo.insert(pid, plan.undo_of);

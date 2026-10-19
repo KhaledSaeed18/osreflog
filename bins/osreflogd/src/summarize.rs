@@ -68,13 +68,13 @@ pub fn run(items: Vec<Item>) -> io::Result<Vec<Vec<String>>> {
         return Ok(Vec::new());
     }
     let exe = std::env::current_exe()?;
-    let mut child = Command::new(exe)
-        .arg(WORKER_FLAG)
+    let mut cmd = Command::new(exe);
+    cmd.arg(WORKER_FLAG)
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    let mut child = crate::selinux::spawn(&mut cmd, crate::selinux::SUMMARY_DOMAIN)?;
     let request = serde_json::to_vec(&Request { items }).map_err(io::Error::other)?;
     let mut stdin = child
         .stdin

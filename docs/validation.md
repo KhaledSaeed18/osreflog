@@ -140,7 +140,8 @@ Said here so nobody has to find out the hard way.
   differs from the true state needs real-world data.
 - **Other hardware and layouts.** One laptop, one btrfs layout (Fedora's default). No AMD, no
   NVMe-specific numbers, no LUKS-on-btrfs check yet.
-- **SELinux confinement of the daemon.** `osreflog-selinux` gives the ledger and runtime files
-  types of their own, but osreflogd itself runs unconfined (`unconfined_service_t`): a domain for
-  a daemon that reads every file and, on undo, writes any of them would mostly be a label. A
-  narrow domain for the undo and summary workers is the next step.
+- **SELinux confinement.** `osreflog-selinux` gives the ledger and runtime files types of their
+  own, but osreflogd itself runs unconfined (`unconfined_service_t`): a domain for a daemon that
+  reads every file and, on undo, writes any of them would mostly be a label. The summary and undo
+  workers have domains of their own (0.3.0), permissive until `sudo scripts/p8/selinux-workers.sh`
+  has collected their denials on a real machine and the rules cover them.

@@ -108,7 +108,7 @@ Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
 **Exit:** one real hardware-specific regression (seeded, e.g. a Wi-Fi powersave config) bisected on this laptop end to end. **Met** ([journal](./journal/p7-metal.md)): NetworkManager's Wi-Fi power save switched on by one of three causes, found (#680) in 3 metal probes, 6 reboots, the default entry untouched throughout.
 
 ## P8: GNOME app, packaging, hardening
-- [x] SELinux policy module (types for the ledger and runtime files; a worker domain later); systemd hardening audit (`systemd-analyze security`, held by CI)
+- [x] SELinux policy module (types for the ledger and runtime files; domains for the summary and undo workers, permissive until their denials are collected); systemd hardening audit (`systemd-analyze security`, held by CI)
 - [x] COPR packaging (Fedora 44, 45, rawhide), RPM with the dnf actions file, units, polkit, D-Bus config; GitHub releases built by CI
 - [x] Docs: [install](./install.md), [troubleshooting](./troubleshooting.md), [validation](./validation.md), [performance](./performance.md); the "what changes in a month" research note still to come
 - [x] GTK4/libadwaita app (P8a–P8d)

@@ -15,6 +15,8 @@ pub mod probe;
 pub mod runner;
 #[allow(unsafe_code)]
 pub mod sandbox;
+#[allow(unsafe_code)]
+pub mod selinux;
 pub mod service;
 pub mod summarize;
 pub mod undo;

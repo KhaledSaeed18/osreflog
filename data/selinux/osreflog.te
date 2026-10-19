@@ -1,4 +1,4 @@
-policy_module(osreflog, 0.2.0)
+policy_module(osreflog, 0.3.0)
 
 ########################################
 #
@@ -19,3 +19,69 @@ files_type(osreflog_var_lib_t)
 ## <desc><p>osreflogd's runtime directories in /run.</p></desc>
 type osreflog_runtime_t;
 files_pid_file(osreflog_runtime_t)
+
+########################################
+#
+# osreflogd's two workers, each in a domain of its own (0.3.0).
+#
+# The summarizer parses content any local user can influence (threat model A2); the undo
+# worker is the only process that writes to /. Both are this same executable, started by
+# osreflogd with the domain asked for at exec (setexeccon): a bin_t file when packaged in
+# /usr/libexec, usr_t when installed for development in /usr/local/libexec. Only osreflogd's
+# domain may enter them. Without this module the workers run as osreflogd does.
+#
+# Permissive for now: they log what they would be denied and are denied nothing, until the
+# denials on a real machine (scripts/p8/selinux-workers.sh) show the rules below are enough.
+#
+
+gen_require(`
+	type unconfined_service_t, bin_t, usr_t;
+	attribute non_security_file_type;
+	class process2 nnp_transition;
+')
+
+## <desc><p>osreflogd's summarizing worker: reads stdin, writes stdout, nothing else.</p></desc>
+type osreflog_summary_t;
+domain_type(osreflog_summary_t)
+role system_r types osreflog_summary_t;
+permissive osreflog_summary_t;
+
+## <desc><p>osreflogd's undo worker: writes the files an undo puts back, and the attic.</p></desc>
+type osreflog_undo_t;
+domain_type(osreflog_undo_t)
+role system_r types osreflog_undo_t;
+permissive osreflog_undo_t;
+
+# Entered from osreflogd only. The unit sets NoNewPrivileges=, so the transition needs
+# nnp_transition as well.
+allow unconfined_service_t { osreflog_summary_t osreflog_undo_t }:process transition;
+allow unconfined_service_t { osreflog_summary_t osreflog_undo_t }:process2 nnp_transition;
+allow { osreflog_summary_t osreflog_undo_t } { bin_t usr_t }:file { entrypoint execute map read open getattr };
+allow { osreflog_summary_t osreflog_undo_t } unconfined_service_t:process sigchld;
+
+# What both need to start and talk to osreflogd: its pipes, the loader and libraries, their
+# own /proc entries (the main thread's stack bounds), and their sandbox (limits, capabilities).
+allow { osreflog_summary_t osreflog_undo_t } unconfined_service_t:fd use;
+allow { osreflog_summary_t osreflog_undo_t } unconfined_service_t:fifo_file rw_inherited_fifo_file_perms;
+allow { osreflog_summary_t osreflog_undo_t } self:process { setrlimit setcap getcap getsched signal sigchld };
+allow { osreflog_summary_t osreflog_undo_t } self:fifo_file rw_fifo_file_perms;
+allow { osreflog_summary_t osreflog_undo_t } self:file read_file_perms;
+allow { osreflog_summary_t osreflog_undo_t } self:dir list_dir_perms;
+libs_use_ld_so(osreflog_summary_t)
+libs_use_shared_libs(osreflog_summary_t)
+libs_use_ld_so(osreflog_undo_t)
+libs_use_shared_libs(osreflog_undo_t)
+miscfiles_read_localization(osreflog_undo_t)
+
+# The undo worker: owners, modes and labels of what it puts back, in any directory that
+# isn't security policy, and the attic. No network, no exec, no modules, no ptrace.
+allow osreflog_undo_t self:capability { chown fowner dac_override };
+allow osreflog_undo_t self:process setfscreate;
+files_manage_non_security_dirs(osreflog_undo_t)
+files_manage_non_security_files(osreflog_undo_t)
+files_relabel_non_security_files(osreflog_undo_t)
+allow osreflog_undo_t non_security_file_type:lnk_file manage_lnk_file_perms;
+allow osreflog_undo_t non_security_file_type:{ dir lnk_file } { relabelfrom relabelto };
+manage_dirs_pattern(osreflog_undo_t, osreflog_var_lib_t, osreflog_var_lib_t)
+manage_files_pattern(osreflog_undo_t, osreflog_var_lib_t, osreflog_var_lib_t)
+selinux_validate_context(osreflog_undo_t)

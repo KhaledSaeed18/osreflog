@@ -11,6 +11,11 @@ release's notes from its section here.
   app's status tooltip shows it too. `osreflog doctor` warns when the snapshots surely hold more
   than the free space. Diffs from earlier versions didn't measure it, so the range counts from
   the first checkpoint after the upgrade until those snapshots are pruned.
+- `osreflog-selinux` has domains for osreflogd's two workers: the summarizer (which parses
+  untrusted content) may only talk to the daemon over its pipes; the undo worker may write the
+  files it puts back and the attic, but has no network or exec. osreflogd asks for them when it
+  starts a worker, and runs it as itself when the module isn't installed. Both are permissive in
+  this release: they log what they would be denied, and deny nothing.
 - Retention can be set in `/etc/osreflog/retention.conf` (hours to keep everything, days of
   dailies, weeks of weeklies). The file ships with the defaults, commented out.
 - D-Bus is on zbus 6 (daemon, CLI, app and user agent); zbus 5's separate zvariant, zbus_names
