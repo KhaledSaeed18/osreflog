@@ -211,3 +211,13 @@ It installs the build, then runs the doctor, the P3 testbed (capture and lineage
 ### 2026-10-20: no UMask for the daemon, after all
 
 P8f left `UMask=` out because the undo engine relied on the umask for some directory modes. Looked at again: what the daemon keeps is already private without it (the ledger and blobs live on the btrfs top level, mounted only in the daemon's namespace; the attic and `/run/osreflog` are 0700), while a umask of 0077 would also apply to what it makes for others to read: the probe clones' files, the cached VM initramfs, the files it hands nspawn and qemu. It would protect nothing new and risk the bisect tiers, so the unit stays without it.
+
+### 2026-10-20: runbook for 0.3.0 (root, on the laptop)
+
+Everything above that needs root, in one script, before 0.3.0 is tagged. The binaries are built (release, the undo gate's test binary, the loopback test):
+
+```bash
+sudo scripts/p8/check-0.3.0.sh 2>&1 | tee perf-out/check-0.3.0.log
+```
+
+It runs the loopback engine test (schema 6 and the 5 MiB space check), installs the SELinux module and this build and runs the testbed and the live undo workload with the workers in their domains (denials into `perf-out/selinux-avc.log`), the seeded bisect suite, then status and doctor. Then one reboot, and `journalctl -b -u osreflogd -o short-monotonic | head` should show the live witness watching before the boot checkpoint. The soak keeps running through all of it (the restarts are segments of their own); `scripts/perf/soak-unit.sh status` shows how far it is.
