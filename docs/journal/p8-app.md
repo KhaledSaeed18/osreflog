@@ -221,3 +221,16 @@ sudo scripts/p8/check-0.3.0.sh 2>&1 | tee perf-out/check-0.3.0.log
 ```
 
 It runs the loopback engine test (schema 6 and the 5 MiB space check), installs the SELinux module and this build and runs the testbed and the live undo workload with the workers in their domains (denials into `perf-out/selinux-avc.log`), the seeded bisect suite, then status and doctor. Then one reboot, and `journalctl -b -u osreflogd -o short-monotonic | head` should show the live witness watching before the boot checkpoint. The soak keeps running through all of it (the restarts are segments of their own); `scripts/perf/soak-unit.sh status` shows how far it is.
+
+### 2026-10-20: 0.3.0's root checks, first run
+
+`sudo scripts/p8/check-0.3.0.sh` (log in `perf-out/check-0.3.0.log`):
+
+- **Loopback engine test: 2/2.** Schema 6 from scratch; the space report after 4 MiB deleted, 1 MiB written over and 1 MiB appended: at least = at most = **5,263,389 bytes**, 5 MiB and the 20 KiB of small files the scenario also replaces; after pruning to one snapshot, 0.
+- **The module** built, installed and loaded; `/var/lib/osreflog` is `osreflog_var_lib_t`; doctor ok.
+- **Both workers ran in their domains**: "worker started as system_u:system_r:osreflog_summary_t:s0" two seconds after the restart, and `osreflog_undo_t` for the live undo workload, which passed (15 checks, including the dnf undo). The script still said "no worker ran in it": `journalctl … | grep -q` under `pipefail` fails when grep stops reading early. It reads the journal once now.
+- **One denial**, twice: `relabelto` by `osreflog_undo_t` on its temporary file with `unconfined_u:object_r:etc_t:s0`. Not a missing type rule (`files_relabel_non_security_files` has it) but the identity constraint: a restored label keeps the SELinux user the file had, and only exempt domains may set another user than their own. `domain_obj_id_change_exemption(osreflog_undo_t)`. The summarizer was denied nothing. With that, both domains enforce; the next run turns dontaudit rules off (`semodule -DB`) so a denial can't hide.
+- **Testbed: 15/16**, the one failure the harness again: the sed cause's label was the outer script's command line (`sudo scripts/p8/check-0.3.0.sh`), two wrappers up. `OSREFLOG_CHECK_PARENT` is a comma-separated list now, each wrapper adding itself.
+- **Seeded bisect: 5/5** with the workers' new start path.
+
+Still to run: `sudo scripts/p8/selinux-workers.sh` with the domains enforcing, then a reboot for the boot order.

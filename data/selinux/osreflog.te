@@ -30,8 +30,9 @@ files_pid_file(osreflog_runtime_t)
 # /usr/libexec, usr_t when installed for development in /usr/local/libexec. Only osreflogd's
 # domain may enter them. Without this module the workers run as osreflogd does.
 #
-# Permissive for now: they log what they would be denied and are denied nothing, until the
-# denials on a real machine (scripts/p8/selinux-workers.sh) show the rules below are enough.
+# They enforce. The first run on a real machine, permissive (scripts/p8/selinux-workers.sh:
+# the testbed and the live undo workload, 2026-10-20), logged one denial: the undo worker
+# putting back a file's label with its original SELinux user (the exemption below).
 #
 
 gen_require(`
@@ -44,13 +45,11 @@ gen_require(`
 type osreflog_summary_t;
 domain_type(osreflog_summary_t)
 role system_r types osreflog_summary_t;
-permissive osreflog_summary_t;
 
 ## <desc><p>osreflogd's undo worker: writes the files an undo puts back, and the attic.</p></desc>
 type osreflog_undo_t;
 domain_type(osreflog_undo_t)
 role system_r types osreflog_undo_t;
-permissive osreflog_undo_t;
 
 # Entered from osreflogd only. The unit sets NoNewPrivileges=, so the transition needs
 # nnp_transition as well.
@@ -77,6 +76,9 @@ miscfiles_read_localization(osreflog_undo_t)
 # isn't security policy, and the attic. No network, no exec, no modules, no ptrace.
 allow osreflog_undo_t self:capability { chown fowner dac_override };
 allow osreflog_undo_t self:process setfscreate;
+# A restored label keeps its own SELinux user (unconfined_u for a file an admin made), which
+# the identity constraint allows only to exempt domains.
+domain_obj_id_change_exemption(osreflog_undo_t)
 files_manage_non_security_dirs(osreflog_undo_t)
 files_manage_non_security_files(osreflog_undo_t)
 files_relabel_non_security_files(osreflog_undo_t)

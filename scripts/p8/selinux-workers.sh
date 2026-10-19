@@ -1,8 +1,9 @@
 #!/bin/bash
 # The workers' SELinux domains (0.3.0): installs the osreflog-selinux module built from
 # data/selinux and the build in target/release, runs the work that starts both workers, and
-# lists what SELinux would have denied them. The domains are permissive: nothing is denied,
-# and the denials logged here are what decides when they can enforce.
+# lists what SELinux denied them (dontaudit rules off for the run, so nothing is hidden). The
+# domains enforce since 0.3.0's first run of this (one denial, then fixed); any denial here is a
+# rule missing.
 #
 #   cargo build --release && cargo test --release -p osreflog-undo --no-run   # as your user
 #   sudo scripts/p8/selinux-workers.sh 2>&1 | tee perf-out/selinux-workers.log
@@ -33,7 +34,10 @@ step() {
 
 [ "$(getenforce)" = Enforcing ] || echo "note: SELinux is $(getenforce), not Enforcing"
 build=$(mktemp -d)
-trap 'rm -rf "$build"' EXIT
+# dontaudit rules hide some denials even from the log; off for this run, so a domain that
+# enforces can't be refused anything unseen. Rebuilt with them at the end.
+semodule -DB
+trap 'semodule -B; rm -rf "$build"' EXIT
 cp data/selinux/osreflog.{te,fc,if} "$build/"
 step "build the module" make -s -C "$build" -f /usr/share/selinux/devel/Makefile osreflog.pp
 step "install the module" semodule -i "$build/osreflog.pp"
@@ -43,21 +47,22 @@ step "the ledger has its type" bash -c 'ls -Zd /var/lib/osreflog | grep -q osref
 step "the module is loaded" bash -c 'semodule -l | grep -qx osreflog'
 step "doctor" osreflog doctor
 # The testbed's causes are summarized (the summarizer); the live undo workload undoes some.
-step "P3 testbed (summaries)" env OSREFLOG_CHECK_PARENT=selinux-workers scripts/p3/testbed.sh
+step "P3 testbed (summaries)" env OSREFLOG_CHECK_PARENT="${OSREFLOG_CHECK_PARENT:+$OSREFLOG_CHECK_PARENT,}selinux-workers" scripts/p3/testbed.sh
 step "P5 live undo (the undo worker)" scripts/p5/undo-workload.sh
 
 echo "== the domains the workers ran in"
-journalctl -u osreflogd --since "$since" --no-pager | grep "worker started as" | sort -u
+# Read once into a variable: `journalctl | grep -q` fails under pipefail when grep stops early.
+log=$(journalctl -u osreflogd --since "$since" --no-pager)
+grep "worker started as" <<<"$log" | sort -u
 for domain in osreflog_summary_t osreflog_undo_t; do
-    if journalctl -u osreflogd --since "$since" --no-pager | grep -q "worker started as .*:$domain:"; then
+    if grep -q "worker started as .*:$domain:" <<<"$log"; then
         echo "-- $domain: ok"
     else
         echo "-- $domain: no worker ran in it"
         failed=1
     fi
 done
-if journalctl -u osreflogd --since "$since" --no-pager | grep -q "SELinux refused"; then
-    journalctl -u osreflogd --since "$since" --no-pager | grep "SELinux refused"
+if grep "SELinux refused" <<<"$log"; then
     failed=1
 fi
 

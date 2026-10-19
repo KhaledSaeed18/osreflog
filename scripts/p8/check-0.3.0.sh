@@ -34,6 +34,8 @@ step() {
     fi
 }
 since=$(date '+%Y-%m-%d %H:%M:%S')
+# The testbed's causes are labeled with this script's command line (the session's top command).
+export OSREFLOG_CHECK_PARENT=check-0.3.0
 step "loopback engine test (schema 6, space)" scripts/p2/it.sh
 step "worker domains" scripts/p8/selinux-workers.sh
 step "seeded bisect" scripts/p6/seeded.sh

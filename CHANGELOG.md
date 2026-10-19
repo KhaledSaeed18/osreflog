@@ -14,8 +14,7 @@ release's notes from its section here.
 - `osreflog-selinux` has domains for osreflogd's two workers: the summarizer (which parses
   untrusted content) may only talk to the daemon over its pipes; the undo worker may write the
   files it puts back and the attic, but has no network or exec. osreflogd asks for them when it
-  starts a worker, and runs it as itself when the module isn't installed. Both are permissive in
-  this release: they log what they would be denied, and deny nothing.
+  starts a worker, and runs it as itself when the module isn't installed.
 - Writes in Flatpak's system installation (`/var/lib/flatpak`) are one `flatpak` cause that
   counts its paths without listing them, as the README always said, and are noise in diffs. An
   appstream refresh had been recorded path by path as an "unknown" cause: 41,000 rows, 96% of

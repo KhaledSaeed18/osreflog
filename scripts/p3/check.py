@@ -28,10 +28,11 @@ check("diff has the live witness", "live" in diff["witnesses"], str(diff["witnes
 sed = cause_of(f"{T}/sed.conf")
 check("sed.conf: a command cause", sed.get("kind") == "command", json.dumps(by_path.get(f"{T}/sed.conf")))
 # A command cause is labeled with the session's top command: the testbed's own line, or the
-# script that ran it (scripts/p8/hardening-check.sh says so in OSREFLOG_CHECK_PARENT).
-parent = os.environ.get("OSREFLOG_CHECK_PARENT", "")
+# script that ran it: the wrapping scripts say who they are in OSREFLOG_CHECK_PARENT, a comma-separated
+# list when one runs another (check-0.3.0.sh runs selinux-workers.sh, which runs the testbed).
+parents = [p for p in os.environ.get("OSREFLOG_CHECK_PARENT", "").split(",") if p]
 label = sed.get("label", "")
-check("sed.conf: label is the command", "sed" in label or "testbed" in label or (parent != "" and parent in label), label)
+check("sed.conf: label is the command", "sed" in label or "testbed" in label or any(p in label for p in parents), label)
 check("edit.conf: attributed", bool(cause_of(f"{T}/edit.conf")), json.dumps(by_path.get(f"{T}/edit.conf")))
 unit = cause_of(f"{T}/unit.conf")
 check("unit.conf: the writer unit", unit.get("kind") == "unit" and "osreflog-testbed-writer" in unit.get("label", ""), json.dumps(unit))
