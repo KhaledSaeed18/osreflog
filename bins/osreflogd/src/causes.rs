@@ -98,7 +98,9 @@ fn actor_of(p: &Proc, command: Vec<String>) -> Actor {
 #[allow(clippy::case_sensitive_file_extension_comparisons)]
 pub fn system_unit(cgroup: &str) -> Option<String> {
     let rest = cgroup.strip_prefix("/system.slice/")?;
-    let unit = rest.split('/').next()?;
+    // Past any sub-slices: templated units sit in one of their own (`system-getty.slice/
+    // getty@tty1.service`), and so do some plain ones (`system-cups.slice/cups.service`).
+    let unit = rest.split('/').find(|c| !c.ends_with(".slice"))?;
     (unit.ends_with(".service") || unit.ends_with(".scope")).then(|| unit.to_owned())
 }
 
@@ -486,6 +488,15 @@ mod tests {
             system_unit("/user.slice/user-1000.slice/session-3.scope"),
             None
         );
+        // Units in sub-slices were "unknown" causes until 0.3.0 (cupsd, every template).
+        for (cgroup, unit) in [
+            ("/system.slice/system-cups.slice/cups.service", "cups.service"),
+            ("/system.slice/system-getty.slice/getty@tty1.service", "getty@tty1.service"),
+            ("/system.slice/a.slice/b.slice/x.service/payload", "x.service"),
+        ] {
+            assert_eq!(system_unit(cgroup).as_deref(), Some(unit), "{cgroup}");
+        }
+        assert_eq!(system_unit("/system.slice/system-cups.slice"), None);
     }
 
     #[test]
