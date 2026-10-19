@@ -114,13 +114,17 @@ const NOISE: &[&str] = &[
     "/var/lib/logrotate/",
     "/var/lib/NetworkManager/timestamps",
     "/var/lib/systemd/random-seed",
+    // The same, found reading five days of the ledger (2026-10-20): DHCP lease renewals (50
+    // causes) and abrt's journal cursor (42).
+    "/var/lib/NetworkManager/internal-",
+    "/var/lib/abrt/abrt-dump-journal-",
     // Container engines' image and layer stores: their own databases, kept open and written
     // in place (so only the state witness sees them), and changed by pulls and builds, not by
     // configuration (P4: dockerd's identity cache was the one unexplained change).
     "/var/lib/docker/",
     "/var/lib/containers/",
     // Flatpak keeps its own history and rollback (R4); an appstream refresh alone rewrites
-    // tens of thousands of files (2026-10: 97% of every path recorded in five days).
+    // tens of thousands of files (2026-10: 96% of every path recorded in five days).
     FLATPAK,
 ];
 
@@ -553,6 +557,20 @@ mod tests {
         assert_eq!(
             classify("/var/lib/flatpak/appstream/flathub/x86_64/active/appstream.xml.gz"),
             Class::Noise
+        );
+        assert_eq!(
+            classify(
+                "/var/lib/NetworkManager/internal-b0241dfa-7a2a-4983-80f4-44b4777b5608-wlp2s0.lease"
+            ),
+            Class::Noise
+        );
+        assert_eq!(
+            classify("/var/lib/abrt/abrt-dump-journal-core.state"),
+            Class::Noise
+        );
+        assert_eq!(
+            classify("/var/lib/NetworkManager/NetworkManager.state"),
+            Class::State
         );
         assert_eq!(classify("/var/lib/rsyslog/imjournal.state"), Class::Noise);
         assert_eq!(

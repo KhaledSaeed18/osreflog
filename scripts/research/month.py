@@ -14,6 +14,7 @@ looks like an id generalised. Causes made by osreflog's own test scripts (scratc
 
 import collections
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,16 +48,46 @@ def is_test(cause, changes):
         return True
     if "osreflog-" in cause.get("label", "") and cause["kind"] == "command":
         return True
-    return bool(changes) and all(re.match(r"/etc/osreflog-", c["path"]) for c in changes)
+    # Scratch files of the tests, and osreflog's own development installs.
+    return bool(changes) and all("osreflog" in c["path"] for c in changes)
+
+
+FLATPAK = "/var/lib/flatpak/"
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def noise_prefixes():
+    """Today's noise paths, from the model's source, so older records read as new ones do
+    (rsyslog's state file was recorded for a few hours before it became noise)."""
+    with open(os.path.join(REPO, "crates/model/src/lib.rs")) as f:
+        src = f.read()
+    block = re.search(r"const NOISE: &\[&str\] = &\[(.*?)\];", src, re.S).group(1)
+    return [p for p in re.findall(r'"([^"]+)"', block)] + [FLATPAK]
+
+
+def unit_of(cgroup):
+    """As osreflogd 0.3.0 reads a cgroup: the unit past any sub-slices of system.slice."""
+    rest = cgroup.removeprefix("/system.slice/") if cgroup.startswith("/system.slice/") else None
+    if rest is None:
+        return None
+    unit = next((c for c in rest.split("/") if not c.endswith(".slice")), "")
+    return unit if unit.endswith((".service", ".scope")) else None
 
 
 def who(cause):
+    if cause["kind"] == "flatpak":
+        return "flatpak"
     if cause["kind"] == "unit":
         return cause["label"]
+    # Recorded before 0.3.0 as "unknown": a unit in a sub-slice.
+    if cause["kind"] == "unknown" and (unit := unit_of(cause["actor"].get("cgroup", ""))):
+        return unit
     if cause["kind"] == "dnf":
         return "dnf"
     if cause["kind"] == "command":
         return f"{cause['actor'].get('comm') or '?'} (a command)"
+    if cause["kind"] == "unknown":
+        return f"{cause['actor'].get('comm') or '?'} (no unit, no shell)"
     return cause["kind"]
 
 
@@ -95,7 +126,24 @@ def main():
         except subprocess.CalledProcessError:
             detail[c["id"]] = []
     tests = {c["id"] for c in causes if is_test(c, detail[c["id"]])}
-    system = [c for c in causes if c["id"] not in tests]
+    # Flatpak's own installation: one opaque cause since 0.3.0 (R4), listed path by path
+    # before. Counted apart, so its appstream refreshes don't drown everything else.
+    flatpak_paths = 0
+    noise = tuple(noise_prefixes())
+    noise_dropped = 0
+    for c in causes:
+        if c["kind"] == "flatpak":
+            flatpak_paths += c["package_paths"]
+        kept = [ch for ch in detail[c["id"]] if not ch["path"].startswith(FLATPAK)]
+        flatpak_paths += len(detail[c["id"]]) - len(kept)
+        quiet = [ch for ch in kept if not ch["path"].startswith(noise)]
+        noise_dropped += len(kept) - len(quiet)
+        detail[c["id"]] = quiet
+    flatpak_causes = {c["id"] for c in causes if c["kind"] == "flatpak"}
+    empty = {c["id"] for c in causes if not detail[c["id"]] and c["kind"] != "flatpak"
+             and c["id"] not in tests}
+    system = [c for c in causes
+              if c["id"] not in tests and c["id"] not in flatpak_causes and c["id"] not in empty]
     first = min(c["started_ms"] for c in causes)
     last = max(c["ended_ms"] for c in causes)
     span_days = max((last - first) / DAY_MS, 1 / 24)
@@ -104,16 +152,21 @@ def main():
         f"Span: {time.strftime('%Y-%m-%d', time.localtime(first / 1000))} to "
         f"{time.strftime('%Y-%m-%d', time.localtime(last / 1000))} ({span_days:.1f} days). "
         f"{len(causes)} causes, {len(tests)} of them made by osreflog's own tests and left out "
-        f"below; {len(system)} from the system and the people using it, "
-        f"{len(system) / span_days:.0f} a day.",
+        f"below; {len(flatpak_causes) + len(empty)} with nothing left once Flatpak's "
+        f"installation ({flatpak_paths} paths, counted apart) and paths that are noise today "
+        f"({noise_dropped}) are taken out; {len(system)} from the system and the people using "
+        f"it, {len(system) / span_days:.1f} a day.",
         "",
         "### Who changes the system",
         "",
     ]
-    kinds = collections.Counter(c["kind"] for c in system)
+    def kind(c):
+        return "unit" if c["kind"] == "unknown" and unit_of(c["actor"].get("cgroup", "")) else c["kind"]
+
+    kinds = collections.Counter(kind(c) for c in system)
     changes_by_kind = collections.Counter()
     for c in system:
-        changes_by_kind[c["kind"]] += c["changes"]
+        changes_by_kind[kind(c)] += len(detail[c["id"]])
     lines.append(table(
         ["Kind", "Causes", "Changes", "Share of causes"],
         [(k, n, changes_by_kind[k], f"{n / len(system):.0%}") for k, n in kinds.most_common()],
@@ -122,7 +175,7 @@ def main():
     actors = collections.Counter(who(c) for c in system)
     actor_changes = collections.Counter()
     for c in system:
-        actor_changes[who(c)] += c["changes"]
+        actor_changes[who(c)] += len(detail[c["id"]])
     lines.append(table(
         ["Who", "Causes", "Changes"],
         [(a, n, actor_changes[a]) for a, n in actors.most_common(15)],

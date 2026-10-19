@@ -28,7 +28,7 @@
 | Folder | Contents |
 | ------ | -------- |
 | [decisions/](./decisions/) | Architecture Decision Records (ADRs) |
-| [research/](./research/) | [Related work](./research/related-work.md); research tracks are added as they start |
+| [research/](./research/) | [Related work](./research/related-work.md); [what changes on a desktop Linux system](./research/what-changes.md) (the ledger as a dataset) |
 | [naming/](./naming/) | The name-check report that led to "osreflog" |
 | [journal/](./journal/) | One entry per phase: what worked, what broke, what changed |
 

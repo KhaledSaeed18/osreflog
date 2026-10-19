@@ -490,9 +490,18 @@ mod tests {
         );
         // Units in sub-slices were "unknown" causes until 0.3.0 (cupsd, every template).
         for (cgroup, unit) in [
-            ("/system.slice/system-cups.slice/cups.service", "cups.service"),
-            ("/system.slice/system-getty.slice/getty@tty1.service", "getty@tty1.service"),
-            ("/system.slice/a.slice/b.slice/x.service/payload", "x.service"),
+            (
+                "/system.slice/system-cups.slice/cups.service",
+                "cups.service",
+            ),
+            (
+                "/system.slice/system-getty.slice/getty@tty1.service",
+                "getty@tty1.service",
+            ),
+            (
+                "/system.slice/a.slice/b.slice/x.service/payload",
+                "x.service",
+            ),
         ] {
             assert_eq!(system_unit(cgroup).as_deref(), Some(unit), "{cgroup}");
         }
@@ -594,7 +603,13 @@ mod tests {
             &["/usr/libexec/flatpak-system-helper"],
             "/system.slice/flatpak-system-helper.service",
         );
-        let shell = p(800, 1, "bash", &["bash"], "/user.slice/user-1000.slice/session-2.scope");
+        let shell = p(
+            800,
+            1,
+            "bash",
+            &["bash"],
+            "/user.slice/user-1000.slice/session-2.scope",
+        );
         let cli = p(801, 800, "flatpak", &["flatpak", "update"], &shell.cgroup);
         let a = flatpak(classify(&[&helper], &Brackets::default()));
         let b = flatpak(classify(&[&cli, &shell], &Brackets::default()));

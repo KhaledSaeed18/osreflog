@@ -18,11 +18,13 @@ release's notes from its section here.
   this release: they log what they would be denied, and deny nothing.
 - Writes in Flatpak's system installation (`/var/lib/flatpak`) are one `flatpak` cause that
   counts its paths without listing them, as the README always said, and are noise in diffs. An
-  appstream refresh had been recorded path by path as an "unknown" cause: 41,000 rows, 97% of
+  appstream refresh had been recorded path by path as an "unknown" cause: 41,000 rows, 96% of
   everything recorded on the test laptop in five days.
 - Services in a slice of their own (every templated unit such as `getty@tty1.service`, and
   some plain ones such as CUPS in `system-cups.slice`) are `unit` causes named after the unit;
   they were "unknown" causes named after the executable.
+- DHCP lease renewals (`/var/lib/NetworkManager/internal-*`) and abrt's journal cursor are
+  noise: state rewritten on a schedule, like rsyslog's cursor.
 - Retention can be set in `/etc/osreflog/retention.conf` (hours to keep everything, days of
   dailies, weeks of weeklies). The file ships with the defaults, commented out.
 - D-Bus is on zbus 6 (daemon, CLI, app and user agent); zbus 5's separate zvariant, zbus_names
