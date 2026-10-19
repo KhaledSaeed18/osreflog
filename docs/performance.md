@@ -105,4 +105,6 @@ scripts/perf/soak-unit.sh status    # the table from the samples so far
 ```
 
 The second run started 2026-10-20 02:09, a few hours after a boot (osreflogd at 15 MB). Its
-table goes here when it ends.
+first half hour isn't normal use: the research note's script asked the daemon for every cause
+twice (about 2,000 reads), which put the daemon at 52 MB and its average CPU near 6 %. Its table
+goes here when it ends.
