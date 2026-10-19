@@ -47,11 +47,12 @@ fn plural(n: u64, one: &str, many: &str) -> String {
 pub fn subtitle(c: &Cause) -> String {
     let mut s = format!("{} · {}", c.kind, plural(c.changes, "change", "changes"));
     if c.package_paths > 0 {
-        let _ = write!(
-            s,
-            " · {}",
-            plural(c.package_paths, "package file", "package files")
-        );
+        let (one, many) = if c.kind == "flatpak" {
+            ("Flatpak file", "Flatpak files")
+        } else {
+            ("package file", "package files")
+        };
+        let _ = write!(s, " · {}", plural(c.package_paths, one, many));
     }
     s
 }
@@ -162,7 +163,15 @@ pub fn facts(d: &CauseDetail, local: impl Fn(i64) -> String) -> Vec<(&'static st
             format!("{from} – {to}")
         },
     ));
-    if c.package_paths > 0 {
+    if c.package_paths > 0 && c.kind == "flatpak" {
+        f.push((
+            "Flatpak files",
+            format!(
+                "{} written in Flatpak's installation, not listed (flatpak history has them)",
+                c.package_paths
+            ),
+        ));
+    } else if c.package_paths > 0 {
         f.push((
             "Package files",
             format!(

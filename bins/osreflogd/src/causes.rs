@@ -42,6 +42,8 @@ pub enum Key {
     Command(u32),
     App(String),
     Unknown(String),
+    /// Writes in Flatpak's system installation, counted and not listed (R4).
+    Flatpak,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +194,18 @@ pub fn classify(chain: &[&Proc], brackets: &Brackets) -> Classified {
     }
 }
 
+/// The one cause for writes under [`osreflog_model::FLATPAK`], whoever made them: Flatpak
+/// has its own history (`flatpak history`) and rollback, so osreflog only says it happened.
+#[must_use]
+pub fn flatpak(c: Classified) -> Classified {
+    Classified {
+        key: Key::Flatpak,
+        kind: "flatpak",
+        label: format!("flatpak ({})", c.actor.comm),
+        actor: c.actor,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenCause {
     pub key: Key,
@@ -315,7 +329,8 @@ impl Builder {
         }
     }
 
-    /// Counts a package-owned path written inside a transaction, without listing it.
+    /// Counts a path without listing it: a package-owned path written inside a transaction,
+    /// or a write in Flatpak's installation.
     pub fn count_package_path(&mut self, c: &Classified, ts_ms: i64, now: Instant) {
         let open = self.open.entry(c.key.clone()).or_insert_with(|| OpenCause {
             key: c.key.clone(),
@@ -557,6 +572,24 @@ mod tests {
         let c = classify(&[&worker, &daemon], &b);
         assert_eq!((c.kind, c.key.clone()), ("undo", Key::Undo(11)));
         assert_eq!(c.label, "undo of #42");
+    }
+
+    #[test]
+    fn flatpak_writes_are_one_cause_whoever_made_them() {
+        let helper = p(
+            700,
+            1,
+            "flatpak-system-",
+            &["/usr/libexec/flatpak-system-helper"],
+            "/system.slice/flatpak-system-helper.service",
+        );
+        let shell = p(800, 1, "bash", &["bash"], "/user.slice/user-1000.slice/session-2.scope");
+        let cli = p(801, 800, "flatpak", &["flatpak", "update"], &shell.cgroup);
+        let a = flatpak(classify(&[&helper], &Brackets::default()));
+        let b = flatpak(classify(&[&cli, &shell], &Brackets::default()));
+        assert_eq!((a.kind, &a.key), ("flatpak", &Key::Flatpak));
+        assert_eq!(a.key, b.key);
+        assert_eq!(a.label, "flatpak (flatpak-system-)");
     }
 
     #[test]

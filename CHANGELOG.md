@@ -16,6 +16,10 @@ release's notes from its section here.
   files it puts back and the attic, but has no network or exec. osreflogd asks for them when it
   starts a worker, and runs it as itself when the module isn't installed. Both are permissive in
   this release: they log what they would be denied, and deny nothing.
+- Writes in Flatpak's system installation (`/var/lib/flatpak`) are one `flatpak` cause that
+  counts its paths without listing them, as the README always said, and are noise in diffs. An
+  appstream refresh had been recorded path by path as an "unknown" cause: 41,000 rows, 97% of
+  everything recorded on the test laptop in five days.
 - Retention can be set in `/etc/osreflog/retention.conf` (hours to keep everything, days of
   dailies, weeks of weeklies). The file ships with the defaults, commented out.
 - D-Bus is on zbus 6 (daemon, CLI, app and user agent); zbus 5's separate zvariant, zbus_names

@@ -257,7 +257,9 @@ fn cause_line(c: &Cause) -> String {
             if c.changes == 1 { "" } else { "s" }
         ));
     }
-    if c.package_paths > 0 {
+    if c.package_paths > 0 && c.kind == "flatpak" {
+        counts.push(format!("{} Flatpak paths", c.package_paths));
+    } else if c.package_paths > 0 {
         counts.push(format!("{} package paths", c.package_paths));
     }
     if !counts.is_empty() {
@@ -324,7 +326,12 @@ pub fn show(d: &CauseDetail) {
         local(c.started_ms),
         local(c.ended_ms)
     );
-    if c.package_paths > 0 {
+    if c.package_paths > 0 && c.kind == "flatpak" {
+        println!(
+            "  {} paths written in Flatpak's installation, not listed: `flatpak history` has the details",
+            c.package_paths
+        );
+    } else if c.package_paths > 0 {
         println!(
             "  plus {} package-owned paths written inside the transaction",
             c.package_paths

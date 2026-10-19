@@ -20,7 +20,7 @@ use osreflog_fanotify::event::{
     INFO_NEW_DFID_NAME, INFO_OLD_DFID_NAME,
 };
 use osreflog_fanotify::{Fid, Group, MASK, open_by_handle};
-use osreflog_model::{Class, LiveChange, LiveStatus, classify as class_of};
+use osreflog_model::{Class, FLATPAK, LiveChange, LiveStatus, classify as class_of};
 use rustix::event::{PollFd, PollFlags, poll};
 
 use crate::blobs::Blobs;
@@ -232,6 +232,18 @@ impl Capture {
         }
     }
 
+    /// The cause a write by `pid` belongs to, reading the process from /proc if lineage
+    /// hasn't seen it.
+    fn classify(&mut self, pid: u32) -> causes::Classified {
+        if self.table.chain(pid).is_empty()
+            && let Some(p) = ProcTable::read_proc(pid)
+        {
+            self.table.insert(p);
+        }
+        let chain = self.table.chain(pid);
+        causes::classify(&chain, &self.live.lock_brackets())
+    }
+
     fn handle(&mut self, ev: &osreflog_fanotify::Event, now: Instant) {
         let ts = now_ms();
         if ev.is_overflow() {
@@ -270,20 +282,17 @@ impl Capture {
             return;
         }
         let class = class_of(&path);
+        if path.starts_with(FLATPAK) {
+            let classified = causes::flatpak(self.classify(pid));
+            self.builder.count_package_path(&classified, ts, now);
+            return;
+        }
         if class == Class::Noise {
             self.live.stats().out_of_scope += 1;
             return;
         }
 
-        if self.table.chain(pid).is_empty()
-            && let Some(p) = ProcTable::read_proc(pid)
-        {
-            self.table.insert(p);
-        }
-        let classified = {
-            let chain = self.table.chain(pid);
-            causes::classify(&chain, &self.live.lock_brackets())
-        };
+        let classified = self.classify(pid);
         if class == Class::Package && classified.kind == "dnf" {
             self.builder.count_package_path(&classified, ts, now);
             return;

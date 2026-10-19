@@ -119,7 +119,14 @@ const NOISE: &[&str] = &[
     // configuration (P4: dockerd's identity cache was the one unexplained change).
     "/var/lib/docker/",
     "/var/lib/containers/",
+    // Flatpak keeps its own history and rollback (R4); an appstream refresh alone rewrites
+    // tens of thousands of files (2026-10: 97% of every path recorded in five days).
+    FLATPAK,
 ];
+
+/// Flatpak's system installation. The live witness counts writes here as one `flatpak`
+/// cause without listing them; the state witness treats them as noise.
+pub const FLATPAK: &str = "/var/lib/flatpak/";
 const CONFIG: &[&str] = &["/etc/", "/opt/", "/usr/local/", "/boot/"];
 const STATE: &[&str] = &["/var/", "/root/", "/srv/"];
 
@@ -543,6 +550,10 @@ mod tests {
             Class::State
         );
         assert_eq!(classify("/var/lib/NetworkManager/timestamps"), Class::Noise);
+        assert_eq!(
+            classify("/var/lib/flatpak/appstream/flathub/x86_64/active/appstream.xml.gz"),
+            Class::Noise
+        );
         assert_eq!(classify("/var/lib/rsyslog/imjournal.state"), Class::Noise);
         assert_eq!(
             classify("/var/lib/docker/image/identity-cache.db"),
