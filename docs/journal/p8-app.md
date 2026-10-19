@@ -207,3 +207,7 @@ It installs the build, then runs the doctor, the P3 testbed (capture and lineage
 
 - **`scripts/research/month.py`** reads the ledger through the CLI as the desktop user (no root), leaves out osreflog's own tests and development installs, counts Flatpak apart, reapplies today's noise list to older records (read from the model's source), and prints an anonymised summary: who changes the system, what churns, checkpoints and packages.
 - **[docs/research/what-changes.md](../research/what-changes.md)**: 4.6 days, 342 causes from the system and its user (74 a day), 77% of them services rewriting their own files; uresourced, tuned-ppd and cupsd at the top; 63% of paths changed once. The reading found the Flatpak flood and the units in sub-slices (above), and two more timers (DHCP leases, abrt's cursor), now noise. The month's reading replaces these tables from 2026-11-15.
+
+### 2026-10-20: no UMask for the daemon, after all
+
+P8f left `UMask=` out because the undo engine relied on the umask for some directory modes. Looked at again: what the daemon keeps is already private without it (the ledger and blobs live on the btrfs top level, mounted only in the daemon's namespace; the attic and `/run/osreflog` are 0700), while a umask of 0077 would also apply to what it makes for others to read: the probe clones' files, the cached VM initramfs, the files it hands nspawn and qemu. It would protect nothing new and risk the bisect tiers, so the unit stays without it.
