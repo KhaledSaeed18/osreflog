@@ -222,9 +222,20 @@ pub fn status_line(s: &Status, local: impl Fn(i64) -> String) -> String {
         Some(l) if l.running => "recording changes".to_owned(),
         _ => "not recording live changes (checkpoints only)".to_owned(),
     };
+    let space = s.space.as_ref().map_or_else(String::new, |sp| {
+        format!(
+            " · snapshots hold {}{}",
+            sp.range_text(),
+            if sp.complete {
+                ""
+            } else {
+                " (measured since 0.3.0)"
+            }
+        )
+    });
     match &s.latest {
         Some(c) => format!(
-            "{live} · {} · last checkpoint {} ({})",
+            "{live} · {} · last checkpoint {} ({}){space}",
             plural(s.checkpoints, "checkpoint", "checkpoints"),
             local(c.created_ms),
             c.reason
@@ -1306,6 +1317,7 @@ mod tests {
             chain_entries: 0,
             pending_diffs: 0,
             live: None,
+            space: None,
         };
         assert_eq!(
             status_line(&s, |_| String::new()),

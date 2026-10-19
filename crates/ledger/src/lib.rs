@@ -4,6 +4,7 @@
 
 pub mod refs;
 pub mod retention;
+pub mod space;
 
 use std::path::Path;
 
@@ -14,7 +15,7 @@ use osreflog_model::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -167,6 +168,15 @@ CREATE TABLE dconf_values (
 );
 ";
 
+/// v5 → v6: bytes each interval took out of `/` that its older snapshot still holds (deleted
+/// files, replaced content), for the space report. An estimate, so not chained.
+const SCHEMA_V6: &str = "
+CREATE TABLE interval_space (
+    interval_id INTEGER PRIMARY KEY REFERENCES intervals(id),
+    released_bytes INTEGER NOT NULL
+);
+";
+
 /// A dconf key with its value before and after a change (`None`: unset).
 pub type DconfValue = (String, Option<String>, Option<String>);
 
@@ -180,6 +190,9 @@ pub struct Interval {
     pub stream_bytes: u64,
     pub commands: u64,
     pub changed_bytes: u64,
+    /// Bytes the older snapshot holds that the newer side no longer has; `None` for intervals
+    /// computed before 0.3.0.
+    pub released_bytes: Option<u64>,
     pub changes: Vec<Change>,
     pub packages: Vec<PackageChange>,
     pub transactions: Vec<Transaction>,
@@ -388,6 +401,9 @@ impl Ledger {
         }
         if version < 5 {
             conn.execute_batch(SCHEMA_V5)?;
+        }
+        if version < 6 {
+            conn.execute_batch(SCHEMA_V6)?;
         }
         if version < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -627,6 +643,12 @@ impl Ledger {
             ],
         )?;
         let id = tx.last_insert_rowid();
+        if let Some(released) = iv.released_bytes {
+            tx.execute(
+                "INSERT INTO interval_space (interval_id, released_bytes) VALUES (?1, ?2)",
+                params![id, i64_of(released)],
+            )?;
+        }
         {
             let mut ins = tx.prepare(
                 "INSERT INTO changes (interval_id, path, op, from_path, kind, class, what, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -671,7 +693,9 @@ impl Ledger {
 
     fn interval_row(&self, id: i64) -> Result<Interval> {
         let mut iv = self.conn.query_row(
-            "SELECT from_id, to_id, computed_ms, duration_ms, stream_bytes, commands, changed_bytes FROM intervals WHERE id = ?1",
+            "SELECT from_id, to_id, computed_ms, duration_ms, stream_bytes, commands, changed_bytes,
+                    (SELECT released_bytes FROM interval_space WHERE interval_id = intervals.id)
+             FROM intervals WHERE id = ?1",
             [id],
             |r| {
                 Ok(Interval {
@@ -682,6 +706,7 @@ impl Ledger {
                     stream_bytes: u64_of(r.get(4)?),
                     commands: u64_of(r.get(5)?),
                     changed_bytes: u64_of(r.get(6)?),
+                    released_bytes: r.get::<_, Option<i64>>(7)?.map(u64_of),
                     changes: Vec::new(),
                     packages: Vec::new(),
                     transactions: Vec::new(),
@@ -988,6 +1013,29 @@ impl Ledger {
             first_bad: None,
             detail: None,
         })
+    }
+
+    /// Every stored interval's ends and the bytes it released (`None` before 0.3.0), for the
+    /// space report.
+    ///
+    /// # Errors
+    /// On SQLite errors.
+    pub fn released(&self) -> Result<Vec<(i64, i64, Option<u64>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.from_id, i.to_id, s.released_bytes
+             FROM intervals i LEFT JOIN interval_space s ON s.interval_id = i.id
+             ORDER BY i.to_id, i.from_id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, Option<i64>>(2)?.map(u64_of),
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// The id of the stored interval between two checkpoints.
@@ -1493,6 +1541,7 @@ mod tests {
             stream_bytes: 1000,
             commands: 12,
             changed_bytes: 4096,
+            released_bytes: Some(4096),
             changes: vec![
                 Change {
                     path: "/etc/hosts".into(),

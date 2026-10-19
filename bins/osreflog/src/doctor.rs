@@ -43,6 +43,39 @@ fn root_is_btrfs() -> Option<(String, String)> {
     })
 }
 
+/// Bytes free for unprivileged writes on the filesystem holding `path`.
+fn free_bytes(path: &str) -> Option<u64> {
+    let st = rustix::fs::statvfs(path).ok()?;
+    Some(st.f_bavail.saturating_mul(st.f_frsize))
+}
+
+/// The kept snapshots against the free space: a warning when they surely hold more than is
+/// left, so pruning (or unpinning) would give back more than / has.
+fn space(r: &mut Report, sp: &osreflog_model::Space, free: Option<u64>) {
+    use osreflog_model::bytes_text;
+    let since = if sp.complete {
+        String::new()
+    } else {
+        format!(", counting changes since {}", sp.since)
+    };
+    match free {
+        Some(free) if sp.at_least > free => r.warn(&format!(
+            "the kept snapshots hold at least {} that / no longer has, more than the {} free{since}; see docs/troubleshooting.md",
+            bytes_text(sp.at_least),
+            bytes_text(free)
+        )),
+        Some(free) => r.ok(&format!(
+            "the kept snapshots hold {} that / no longer has ({} free){since}",
+            sp.range_text(),
+            bytes_text(free)
+        )),
+        None => r.ok(&format!(
+            "the kept snapshots hold {} that / no longer has{since}",
+            sp.range_text()
+        )),
+    }
+}
+
 pub async fn run(session: bool) -> anyhow::Result<ExitCode> {
     let mut r = Report {
         failed: false,
@@ -97,6 +130,9 @@ pub async fn run(session: bool) -> anyhow::Result<ExitCode> {
                                 "{} diffs pending (computed in the background)",
                                 s.pending_diffs
                             ));
+                        }
+                        if let Some(sp) = &s.space {
+                            space(&mut r, sp, free_bytes("/"));
                         }
                     }
                     Err(e) => r.fail(&format!("unexpected status reply: {e}")),

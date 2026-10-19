@@ -63,6 +63,8 @@ fn history(root: &Path, rows: &[(i64, i64, &str)]) {
     }
 }
 
+const MIB: usize = 1 << 20;
+
 fn now_s() -> i64 {
     osreflogd::engine::now_ms() / 1000
 }
@@ -82,6 +84,10 @@ fn checkpoints_diffs_packages_and_pruning() {
     write(&root, "var/log/dnf5.log", "start\n");
     rpmdb(&root, &[("bash", "5.3.9"), ("figlet", "2.2.5")]);
     history(&root, &[(1, 1_000, "dnf install bash")]);
+    // For the space report (noise paths, so the default listing below doesn't show them).
+    fs::create_dir_all(root.join("var/cache/it")).unwrap();
+    fs::write(root.join("var/cache/it/big.bin"), vec![7u8; 4 * MIB]).unwrap();
+    fs::write(root.join("var/cache/it/db.bin"), vec![1u8; 2 * MIB]).unwrap();
 
     let layout = Layout::open(&root, &top).unwrap();
     let ledger = Ledger::open(&layout.ledger_path()).unwrap();
@@ -101,9 +107,34 @@ fn checkpoints_diffs_packages_and_pruning() {
     write(&root, "var/log/dnf5.log", "start\nmore\n");
     rpmdb(&root, &[("bash", "5.3.10"), ("hyperfine", "1.20")]);
     history(&root, &[(2, now_s(), "dnf upgrade bash")]);
+    // 4 MiB deleted, 1 MiB overwritten in place, 1 MiB appended: 5 MiB only c1 holds.
+    fs::remove_file(root.join("var/cache/it/big.bin")).unwrap();
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .open(root.join("var/cache/it/db.bin"))
+            .unwrap();
+        f.write_all(&vec![2u8; MIB]).unwrap();
+        f.seek(SeekFrom::End(0)).unwrap();
+        f.write_all(&vec![3u8; MIB]).unwrap();
+        f.sync_all().unwrap();
+    }
 
     let c2 = engine.checkpoint("post-dnf", None, None).unwrap();
     assert_eq!(engine.compute_pending().unwrap(), 1);
+    let space = engine.status().unwrap().space.expect("measured");
+    eprintln!("space: {space:?}");
+    assert!(
+        space.complete && space.at_least == space.at_most,
+        "{space:?}"
+    );
+    let five = 5 * MIB as u64;
+    assert!(
+        (five..five + 100 * 1024).contains(&space.at_least),
+        "c1 alone holds 5 MiB and a few small files, not {} bytes",
+        space.at_least
+    );
 
     let r = engine.diff("@{1}", "@{0}", false).unwrap();
     assert!(r.cached);

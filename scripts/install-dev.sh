@@ -19,6 +19,7 @@ USER_UNIT=/etc/systemd/user/osreflog-user.service
 DBUS=/etc/dbus-1/system.d/io.github.khaledsaeed18.osreflog1.conf
 POLKIT=/usr/share/polkit-1/actions/io.github.khaledsaeed18.osreflog.policy
 ACTIONS=/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions
+RETENTION=/etc/osreflog/retention.conf
 
 # The files in data/ name the packaged paths (/usr/libexec, /usr/bin); a development install
 # lives in /usr/local.
@@ -68,6 +69,8 @@ install -m 0644 "$REPO/data/dbus/io.github.khaledsaeed18.osreflog1.conf" "$DBUS"
 install -m 0644 "$REPO/data/polkit/io.github.khaledsaeed18.osreflog.policy" "$POLKIT"
 restorecon -R "$LIBEXEC" "$BIN" "$UNIT" "$BOOT_UNIT" "$USER_UNIT" "$DBUS" "$POLKIT" 2>/dev/null || true
 
+# The retention settings, all commented out (the defaults); an edited copy stays.
+[ -e "$RETENTION" ] || install -Dm0644 "$REPO/data/etc/retention.conf" "$RETENTION"
 systemctl daemon-reload
 reload_bus
 systemctl enable osreflogd.service

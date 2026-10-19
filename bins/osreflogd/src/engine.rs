@@ -134,6 +134,48 @@ fn decode_packages(data: &[u8]) -> Option<Vec<Package>> {
     )
 }
 
+/// Bytes the older snapshot holds that the newer side no longer has, from each change's
+/// release and the old file as the snapshot has it: one `openat2` and `fstat` per changed
+/// file, resolved beneath the snapshot without following links. Only regular files count,
+/// and a file with other hard links releases nothing when one name goes.
+fn released_bytes(old_root: &File, changes: &[osreflog_btrfs::Change]) -> u64 {
+    use rustix::fs::{FileType, Mode, OFlags, ResolveFlags, fstat, openat2};
+    let mut total = 0u64;
+    for c in changes {
+        let Some(from) = c.release.from() else {
+            continue;
+        };
+        let rel = from.trim_start_matches('/');
+        if rel.is_empty() {
+            continue;
+        }
+        let Ok(fd) = openat2(
+            old_root,
+            rel,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH
+                | ResolveFlags::NO_SYMLINKS
+                | ResolveFlags::NO_MAGICLINKS
+                | ResolveFlags::NO_XDEV,
+        ) else {
+            continue;
+        };
+        let Ok(st) = fstat(&fd) else { continue };
+        if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+            continue;
+        }
+        let whole = matches!(c.release, osreflog_btrfs::Release::Whole { .. });
+        if whole && st.st_nlink > 1 {
+            continue;
+        }
+        let size = u64::try_from(st.st_size).unwrap_or(0);
+        let allocated = u64::try_from(st.st_blocks).unwrap_or(0) * 512;
+        total = total.saturating_add(c.release.bytes(size, allocated));
+    }
+    total
+}
+
 fn model_change(c: osreflog_btrfs::Change) -> Change {
     let (op, from) = match c.op {
         Op::Create => ("create", None),
@@ -363,6 +405,7 @@ impl Engine {
             .finish()
             .map_err(io("btrfs send"))?;
 
+        let released = released_bytes(&from_dir, &diff.changes);
         let mut changes: Vec<Change> = diff.changes.into_iter().map(model_change).collect();
         let rpm_changed = changes.iter().any(|c| c.path.starts_with(RPMDB_PREFIX));
         let history_changed = changes.iter().any(|c| c.path.starts_with(HISTORY_PREFIX));
@@ -397,6 +440,7 @@ impl Engine {
             stream_bytes,
             commands: diff.info.commands,
             changed_bytes: diff.changed_bytes,
+            released_bytes: Some(released),
             changes,
             packages,
             transactions,
@@ -661,6 +705,7 @@ impl Engine {
             latest: all.last().cloned(),
             chain_entries: l.chain_len()?,
             pending_diffs: l.pending_intervals()?.len() as u64,
+            space: osreflog_ledger::space::bounds(&all, &l.released()?),
             live: self.live.running.load(Ordering::Relaxed).then(|| {
                 self.live
                     .stats

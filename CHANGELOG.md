@@ -6,6 +6,13 @@ release's notes from its section here.
 
 ## Unreleased
 
+- `osreflog status` says how much space the kept snapshots hold that `/` no longer has, as a
+  range (held for sure, held at most), measured from the diffs osreflog computes anyway; the
+  app's status tooltip shows it too. `osreflog doctor` warns when the snapshots surely hold more
+  than the free space. Diffs from earlier versions didn't measure it, so the range counts from
+  the first checkpoint after the upgrade until those snapshots are pruned.
+- Retention can be set in `/etc/osreflog/retention.conf` (hours to keep everything, days of
+  dailies, weeks of weeklies). The file ships with the defaults, commented out.
 - D-Bus is on zbus 6 (daemon, CLI, app and user agent); zbus 5's separate zvariant, zbus_names
   and zvariant_derive crates, now unmaintained, are gone from the build.
 

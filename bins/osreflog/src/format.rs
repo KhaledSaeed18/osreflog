@@ -62,6 +62,20 @@ pub fn status(s: &Status) {
         );
     }
     println!("ledger     {} chain entries", s.chain_entries);
+    if let Some(sp) = &s.space {
+        if sp.complete {
+            println!(
+                "space      the kept snapshots hold {} that / no longer has",
+                sp.range_text()
+            );
+        } else {
+            println!(
+                "space      the kept snapshots hold {} that / no longer has, counting what changed since {} (older diffs didn't measure it)",
+                sp.range_text(),
+                sp.since
+            );
+        }
+    }
     if s.pending_diffs > 0 {
         println!("pending    {} diffs being computed", s.pending_diffs);
     }

@@ -9,7 +9,7 @@ pub mod stream;
 
 use std::io::Read;
 
-pub use changes::{Change, ChangeSetBuilder, Kind, Op, StreamInfo, flags, is_orphan_name};
+pub use changes::{Change, ChangeSetBuilder, Kind, Op, Release, StreamInfo, flags, is_orphan_name};
 pub use stream::{Command, StreamError, StreamReader};
 
 /// A parsed send stream: the change set, what the stream said about itself, and its protocol

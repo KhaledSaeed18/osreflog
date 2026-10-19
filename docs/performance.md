@@ -69,10 +69,24 @@ of their own, outside the daemon's memory limit.
 ## Disk
 
 Snapshots share their data with `/`: each costs what changed after it. Retention keeps every
-checkpoint for 48 hours, one a day for 14 days and one a week for 8 weeks; the ledger is kept
-(1,361 chain entries after four days on this machine). How much space the kept snapshots hold is
-not reported yet ([open question Q3](open-questions.md)): `btrfs fi du` took 23 s for two
-snapshots in P1, too slow to run on every `status`, and simple quotas are still to be evaluated.
+checkpoint for 48 hours, one a day for 14 days and one a week for 8 weeks
+(`/etc/osreflog/retention.conf`); the ledger is kept (1,361 chain entries after four days on
+this machine).
+
+What the kept snapshots hold is reported by `status` and checked by `doctor`, from the diffs:
+each interval records the bytes its older snapshot keeps that the newer side lost (deleted
+files and files replaced by a rename, at their allocated size; content written over in place,
+by the ranges written below the old end of the file; truncated tails). Appends release nothing,
+so a growing log costs nothing here. Every byte leaves `/` in exactly one interval, so the sum
+over intervals that start at a kept snapshot is held for sure, and the sum over all intervals
+since the oldest kept snapshot is the most that can be. Measuring costs one `openat2` and one
+`fstat` per changed file in the older snapshot, beside a diff that reads the whole send stream.
+Reflinks and compression aren't accounted for. On a loopback filesystem, 4 MiB deleted, 1 MiB
+written over and 1 MiB appended read as 5 MiB held (`scripts/p2/it.sh`).
+
+Quotas would give exact numbers but stay off: `btrfs fi du` took 23 s for two snapshots in P1,
+full qgroups slow down every snapshot deletion, and simple quotas (squota) charge an extent to
+the subvolume that wrote it, so they can't say what a snapshot holds alone.
 
 ## Over days
 

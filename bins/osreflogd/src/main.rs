@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use osreflog_ledger::Ledger;
+use osreflog_ledger::retention::Policy;
 use osreflog_model::bus;
 use osreflogd::engine::Engine;
 use osreflogd::layout::{DEFAULT_TOP, Layout};
@@ -36,6 +37,30 @@ struct Args {
     /// Serve on the session bus instead of the system bus (development only).
     #[arg(long)]
     session_bus: bool,
+}
+
+/// Retention from `/etc/osreflog/retention.conf`, or the defaults when it's missing or wrong
+/// (said in the journal: a typo shouldn't stop the history).
+fn retention_policy() -> Policy {
+    let path = osreflog_ledger::retention::CONFIG_PATH;
+    let policy = match std::fs::read_to_string(path) {
+        Ok(text) => Policy::parse(&text).unwrap_or_else(|e| {
+            tracing::warn!("{path}: {e}; using the default retention");
+            Policy::default()
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Policy::default(),
+        Err(e) => {
+            tracing::warn!("{path}: {e}; using the default retention");
+            Policy::default()
+        }
+    };
+    tracing::info!(
+        keep_all_hours = policy.keep_all_ms / 3_600_000,
+        daily_days = policy.daily_days,
+        weekly_weeks = policy.weekly_weeks,
+        "retention"
+    );
+    policy
 }
 
 fn main() -> anyhow::Result<()> {
@@ -88,7 +113,9 @@ fn main() -> anyhow::Result<()> {
 
     let layout = Layout::open(&args.root, &args.top).context("setting up the osreflog layout")?;
     let ledger = Ledger::open(&layout.ledger_path()).context("opening the ledger")?;
-    let engine = Arc::new(Engine::new(layout, ledger).context("starting the engine")?);
+    let mut engine = Engine::new(layout, ledger).context("starting the engine")?;
+    engine.policy = retention_policy();
+    let engine = Arc::new(engine);
     engine.start_summarizer();
     if let Some(c) = engine
         .boot_checkpoint_if_needed()

@@ -63,6 +63,86 @@ pub struct Change {
     pub flags: u32,
     /// Bytes of file content written, cloned or re-extented in this interval.
     pub bytes: u64,
+    /// What the interval took away from the object as it was before (for space accounting).
+    pub release: Release,
+}
+
+/// What an interval took away from a pre-existing file: the content its older snapshot now
+/// holds alone. Paths are where the object was before the interval, starting with `/`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Release {
+    /// Nothing of its old content: a new object, or only metadata changed.
+    #[default]
+    Nothing,
+    /// All of it: deleted, or replaced by a new file renamed over it.
+    Whole { from: String },
+    /// The byte ranges written over, and the size it was cut to (written in place).
+    Part {
+        from: String,
+        ranges: Vec<(u64, u64)>,
+        truncated_to: Option<u64>,
+    },
+}
+
+impl Release {
+    /// The old object's path, if the interval released any of it.
+    #[must_use]
+    pub fn from(&self) -> Option<&str> {
+        match self {
+            Release::Nothing => None,
+            Release::Whole { from } | Release::Part { from, .. } => Some(from),
+        }
+    }
+
+    /// Bytes released, given the old file's size and the bytes it had allocated on disk.
+    /// Writes past the old end (appends) release nothing; a truncation releases the tail.
+    #[must_use]
+    pub fn bytes(&self, old_size: u64, old_allocated: u64) -> u64 {
+        let released = match self {
+            Release::Nothing => 0,
+            Release::Whole { .. } => return old_allocated,
+            Release::Part {
+                ranges,
+                truncated_to,
+                ..
+            } => {
+                let keep = truncated_to.map_or(old_size, |t| t.min(old_size));
+                let over: u64 = ranges
+                    .iter()
+                    .map(|&(start, end)| end.min(keep).saturating_sub(start))
+                    .sum();
+                over + (old_size - keep)
+            }
+        };
+        released.min(old_allocated)
+    }
+}
+
+/// Ranges kept per file before they are merged into one span: bounds memory on huge diffs.
+const MAX_RANGES: usize = 64;
+
+/// Adds `[start, end)` to sorted, disjoint ranges, merging what touches.
+fn add_range(ranges: &mut Vec<(u64, u64)>, start: u64, end: u64) {
+    if end <= start {
+        return;
+    }
+    let (mut start, mut end) = (start, end);
+    ranges.retain(|&(a, b)| {
+        if b < start || a > end {
+            true
+        } else {
+            start = start.min(a);
+            end = end.max(b);
+            false
+        }
+    });
+    let at = ranges.partition_point(|&(a, _)| a < start);
+    ranges.insert(at, (start, end));
+    if ranges.len() > MAX_RANGES {
+        let span = (ranges[0].0, ranges[ranges.len() - 1].1);
+        ranges.clear();
+        ranges.push(span);
+    }
 }
 
 /// What the stream says about itself.
@@ -83,6 +163,9 @@ struct Node {
     kind: Kind,
     flags: u32,
     bytes: u64,
+    /// Byte ranges written in place, and the smallest size it was truncated to.
+    ranges: Vec<(u64, u64)>,
+    truncated_to: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -139,7 +222,14 @@ impl ChangeSetBuilder {
                 let len = c.u64(attr::SIZE).unwrap_or(0);
                 self.content(c, len)?;
             }
-            cmd::TRUNCATE | cmd::FALLOCATE => self.content(c, 0)?,
+            cmd::TRUNCATE => {
+                self.content(c, 0)?;
+                let path = path_text(c.need(attr::PATH)?);
+                if let (Some(size), Some(node)) = (c.u64(attr::SIZE), self.nodes.get_mut(&path)) {
+                    node.truncated_to = Some(node.truncated_to.map_or(size, |t| t.min(size)));
+                }
+            }
+            cmd::FALLOCATE => self.content(c, 0)?,
             cmd::CHMOD => self.attr(c, flags::MODE)?,
             cmd::CHOWN => self.attr(c, flags::OWNER)?,
             cmd::UTIMES => self.attr(c, flags::TIMES)?,
@@ -160,6 +250,8 @@ impl ChangeSetBuilder {
                 kind,
                 flags: 0,
                 bytes: 0,
+                ranges: Vec::new(),
+                truncated_to: None,
             },
         );
         Ok(())
@@ -191,6 +283,8 @@ impl ChangeSetBuilder {
                     kind: Kind::Unknown,
                     flags: 0,
                     bytes: 0,
+                    ranges: Vec::new(),
+                    truncated_to: None,
                 },
             );
         }
@@ -200,9 +294,13 @@ impl ChangeSetBuilder {
 
     fn content(&mut self, c: &Command, len: u64) -> Result<(), StreamError> {
         let path = path_text(c.need(attr::PATH)?);
+        let offset = c.u64(attr::FILE_OFFSET);
         let node = self.touch(&path);
         node.flags |= flags::CONTENT;
         node.bytes = node.bytes.saturating_add(len);
+        if let Some(offset) = offset {
+            add_range(&mut node.ranges, offset, offset.saturating_add(len));
+        }
         if node.kind == Kind::Unknown {
             node.kind = Kind::File;
         }
@@ -223,6 +321,8 @@ impl ChangeSetBuilder {
                 kind: Kind::Unknown,
                 flags: 0,
                 bytes: 0,
+                ranges: Vec::new(),
+                truncated_to: None,
             },
         };
         // Re-key touched descendants of a moved directory.
@@ -289,10 +389,23 @@ impl ChangeSetBuilder {
 
         let mut deleted = self.deleted;
         for (path, node) in self.nodes {
+            let mut release = match &node.origin {
+                Some(origin) if node.flags & flags::CONTENT != 0 => Release::Part {
+                    from: format!("/{origin}"),
+                    ranges: node.ranges,
+                    truncated_to: node.truncated_to,
+                },
+                _ => Release::Nothing,
+            };
             let op = match &node.origin {
                 // A new object where an old one was deleted: replaced in place (editors,
                 // rpm and most config tools write a new file and rename it over the old one).
-                None if deleted.remove(&path).is_some() => Op::Modify,
+                None if deleted.remove(&path).is_some() => {
+                    release = Release::Whole {
+                        from: format!("/{path}"),
+                    };
+                    Op::Modify
+                }
                 None => Op::Create,
                 Some(origin) if *origin != path => Op::Rename {
                     from: format!("/{origin}"),
@@ -315,10 +428,14 @@ impl ChangeSetBuilder {
                 kind: node.kind,
                 flags,
                 bytes: node.bytes,
+                release,
             });
         }
         for (path, kind) in deleted {
             out.push(Change {
+                release: Release::Whole {
+                    from: format!("/{path}"),
+                },
                 path: format!("/{path}"),
                 op: Op::Delete,
                 kind,
@@ -485,5 +602,78 @@ mod tests {
         assert!(!is_orphan_name("etc/os-release"));
         assert!(!is_orphan_name("o12-3"));
         assert!(!is_orphan_name("oa-b-c"));
+    }
+
+    #[test]
+    fn releases_say_what_the_old_snapshot_keeps_alone() {
+        let s = StreamWriter::new(2)
+            // Written in place: two overlapping ranges, then an append past the old end.
+            .update_extent("var/db/data", 0, 100)
+            .update_extent("var/db/data", 50, 100)
+            .update_extent("var/db/data", 4000, 96)
+            // Replaced by a new file renamed over it.
+            .path(cmd::MKFILE, "o301-9-0")
+            .update_extent("o301-9-0", 0, 10)
+            .path(cmd::UNLINK, "etc/hosts")
+            .rename("o301-9-0", "etc/hosts")
+            .path(cmd::UNLINK, "etc/old.conf")
+            .path(cmd::CHMOD, "etc/mode-only")
+            .finish();
+        let cs = changes(&s);
+        let release = |p: &str| cs.iter().find(|c| c.path == p).unwrap().release.clone();
+        let Release::Part { ranges, .. } = release("/var/db/data") else {
+            panic!("in place")
+        };
+        assert_eq!(ranges, [(0, 150), (4000, 4096)]);
+        // Old size 4000: the append releases nothing.
+        assert_eq!(release("/var/db/data").bytes(4000, 4096), 150);
+        assert_eq!(
+            release("/etc/hosts"),
+            Release::Whole {
+                from: "/etc/hosts".into()
+            }
+        );
+        assert_eq!(release("/etc/hosts").bytes(30, 4096), 4096);
+        assert_eq!(release("/etc/old.conf").from(), Some("/etc/old.conf"));
+        assert_eq!(release("/etc/mode-only"), Release::Nothing);
+    }
+
+    #[test]
+    fn a_truncation_releases_the_tail_and_a_moved_file_its_old_path() {
+        let s = StreamWriter::new(2)
+            .cmd(
+                cmd::TRUNCATE,
+                &[
+                    (attr::PATH, b"var/log/big"),
+                    (attr::SIZE, &1000u64.to_le_bytes()),
+                ],
+            )
+            .rename("opt/a", "opt/b")
+            .update_extent("opt/b/f", 0, 10)
+            .finish();
+        let cs = changes(&s);
+        let big = &cs
+            .iter()
+            .find(|c| c.path == "/var/log/big")
+            .unwrap()
+            .release;
+        assert_eq!(big.bytes(5000, 8192), 4000);
+        let f = &cs.iter().find(|c| c.path == "/opt/b/f").unwrap().release;
+        assert_eq!(f.from(), Some("/opt/a/f"));
+        assert_eq!(f.bytes(100, 4096), 10);
+    }
+
+    #[test]
+    fn ranges_merge_and_stay_bounded() {
+        let mut r = Vec::new();
+        add_range(&mut r, 10, 20);
+        add_range(&mut r, 30, 40);
+        add_range(&mut r, 20, 30);
+        assert_eq!(r, [(10, 40)]);
+        for i in 0..100u64 {
+            add_range(&mut r, 1000 + i * 10, 1000 + i * 10 + 1);
+        }
+        assert!(r.len() <= MAX_RANGES);
+        assert_eq!((r[0].0, r[r.len() - 1].1), (10, 1991));
     }
 }

@@ -107,6 +107,7 @@ install -Dpm0644 -t %{buildroot}%{_userunitdir} data/systemd/osreflog-user.servi
 install -Dpm0644 -t %{buildroot}%{_datadir}/dbus-1/system.d data/dbus/*.conf
 install -Dpm0644 -t %{buildroot}%{_datadir}/polkit-1/actions data/polkit/*.policy
 install -Dpm0644 -t %{buildroot}%{_sysconfdir}/dnf/libdnf5-plugins/actions.d data/dnf/osreflog.actions
+install -Dpm0644 -t %{buildroot}%{_sysconfdir}/%{name} data/etc/retention.conf
 install -Dpm0644 -t %{buildroot}%{_datadir}/selinux/packages/%{selinuxtype} data/selinux/osreflog.pp.bz2
 install -Dpm0644 -t %{buildroot}%{_datadir}/selinux/devel/include/distributed data/selinux/osreflog.if
 
@@ -163,6 +164,8 @@ fi
 %{_datadir}/dbus-1/system.d/io.github.khaledsaeed18.osreflog1.conf
 %{_datadir}/polkit-1/actions/io.github.khaledsaeed18.osreflog.policy
 %config(noreplace) %{_sysconfdir}/dnf/libdnf5-plugins/actions.d/osreflog.actions
+%dir %{_sysconfdir}/%{name}
+%config(noreplace) %{_sysconfdir}/%{name}/retention.conf
 
 %files app
 %license LICENSE

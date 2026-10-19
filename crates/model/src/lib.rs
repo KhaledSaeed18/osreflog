@@ -431,6 +431,59 @@ pub struct Status {
     /// The live witness, when it's running (P3).
     #[serde(default)]
     pub live: Option<LiveStatus>,
+    /// What the kept snapshots hold on disk, when the diffs say (0.3.0 on).
+    #[serde(default)]
+    pub space: Option<Space>,
+}
+
+/// Space held by the kept snapshots: data they still have that `/` no longer does (deleted
+/// files, replaced content), from the diffs between checkpoints. Each piece of data leaves
+/// `/` in exactly one interval, so what left in an interval starting at a kept snapshot is
+/// surely held (`at_least`), and what left in any interval since the oldest kept one may be
+/// (`at_most`). Reflinks and compression aren't accounted for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Space {
+    pub at_least: u64,
+    pub at_most: u64,
+    /// The checkpoint the bounds start at: the oldest kept snapshot, or a later one when the
+    /// diffs before it were computed by an older osreflog, which didn't measure this.
+    pub since: String,
+    /// `since` is the oldest kept snapshot: the bounds cover everything kept.
+    pub complete: bool,
+}
+
+impl Space {
+    /// "between 210 MiB and 1.4 GiB", or one size when the bounds meet.
+    #[must_use]
+    pub fn range_text(&self) -> String {
+        if bytes_text(self.at_least) == bytes_text(self.at_most) {
+            bytes_text(self.at_most)
+        } else {
+            format!(
+                "between {} and {}",
+                bytes_text(self.at_least),
+                bytes_text(self.at_most)
+            )
+        }
+    }
+}
+
+/// A size in binary units: "512 B", "12 KiB", "3.4 GiB".
+#[must_use]
+pub fn bytes_text(b: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    #[allow(clippy::cast_precision_loss)] // two significant digits are shown
+    let mut v = b as f64;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 || v >= 10.0 {
+        format!("{v:.0} {}", UNITS[unit])
+    } else {
+        format!("{v:.1} {}", UNITS[unit])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -445,6 +498,37 @@ pub struct VerifyReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_read_as_people_say_them() {
+        assert_eq!(bytes_text(512), "512 B");
+        assert_eq!(bytes_text(12 * 1024), "12 KiB");
+        assert_eq!(bytes_text(3_650_000_000), "3.4 GiB");
+        let s = Space {
+            at_least: 210 << 20,
+            at_most: 1_500_000_000,
+            since: "c000001".into(),
+            complete: true,
+        };
+        assert_eq!(s.range_text(), "between 210 MiB and 1.4 GiB");
+        assert_eq!(
+            Space {
+                at_least: 1 << 30,
+                ..s.clone()
+            }
+            .range_text(),
+            "between 1.0 GiB and 1.4 GiB"
+        );
+        assert_eq!(
+            Space {
+                at_least: 0,
+                at_most: 0,
+                ..s.clone()
+            }
+            .range_text(),
+            "0 B"
+        );
+    }
 
     #[test]
     fn classification() {

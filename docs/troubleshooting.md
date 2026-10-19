@@ -109,8 +109,28 @@ can't check; start the bisect again.
 
 Snapshots share data with `/`, so each costs only what changed after it. Retention keeps every
 checkpoint for 48 hours, then one a day for 14 days and one a week for 8 weeks; the ledger is
-small and kept. `osreflog status` shows how many snapshots are kept. If space is short,
-`btrfs filesystem usage /` shows where it went.
+small and kept. `osreflog status` says how many snapshots are kept and how much they hold that
+`/` no longer has (deleted files, replaced content), as a range:
+
+```
+space      the kept snapshots hold between 310 MiB and 1.2 GiB that / no longer has
+```
+
+The low end is held for sure; the high end is what may be, if older snapshots still share it.
+A big upgrade replaces hundreds of MiB of files at once, and the snapshot before it keeps the old
+ones until retention lets it go.
+
+**`doctor` warns that the kept snapshots hold more than is free.** Keep fewer: lower the numbers
+in `/etc/osreflog/retention.conf` (every setting is there, commented out, with its default),
+then `sudo systemctl restart osreflogd`. Snapshots that fall outside the new limits go after the
+next checkpoint; their history stays in the ledger, only `diff`s and bisects that need their
+files can't use them any more. A setting the daemon can't read is named in
+`journalctl -u osreflogd -b`, and the defaults are used.
+
+The range comes from the diffs osreflog computes anyway, at no extra cost; diffs from before
+0.3.0 didn't measure it, so until those snapshots are pruned the line says which checkpoint it
+counts from. For the exact figure, `btrfs filesystem usage /` before and after
+`sudo btrfs subvolume delete` of a snapshot (slow, and a deleted snapshot doesn't come back).
 
 ## Still stuck
 

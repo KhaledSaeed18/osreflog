@@ -25,6 +25,42 @@ impl Default for Policy {
     }
 }
 
+/// Where the daemon reads its retention from, when the file exists.
+pub const CONFIG_PATH: &str = "/etc/osreflog/retention.conf";
+
+impl Policy {
+    /// Reads `key = value` lines (`keep_all_hours`, `daily_days`, `weekly_weeks`; `#` starts a
+    /// comment) over the defaults.
+    ///
+    /// # Errors
+    /// On an unknown key or a value that isn't a whole number (with its line number).
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let mut p = Self::default();
+        for (n, line) in text.lines().enumerate() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                return Err(format!("line {}: expected key = value", n + 1));
+            };
+            let value: i64 = value
+                .trim()
+                .parse()
+                .ok()
+                .filter(|v| *v >= 0)
+                .ok_or_else(|| format!("line {}: {} is not a whole number", n + 1, value.trim()))?;
+            match key.trim() {
+                "keep_all_hours" => p.keep_all_ms = value.saturating_mul(3_600_000),
+                "daily_days" => p.daily_days = value,
+                "weekly_weeks" => p.weekly_weeks = value,
+                other => return Err(format!("line {}: unknown setting {other}", n + 1)),
+            }
+        }
+        Ok(p)
+    }
+}
+
 /// Ids of checkpoints whose snapshots should be deleted now.
 #[must_use]
 pub fn to_prune(checkpoints: &[Checkpoint], now_ms: i64, policy: Policy) -> Vec<i64> {
@@ -99,6 +135,31 @@ mod tests {
         assert_eq!(
             to_prune(&cps, 1000 * DAY_MS, Policy::default()),
             Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn the_config_file_overrides_the_defaults() {
+        let p = Policy::parse("# fewer snapshots\nkeep_all_hours = 12\n\nweekly_weeks=2 # two\n")
+            .unwrap();
+        assert_eq!(
+            p,
+            Policy {
+                keep_all_ms: 12 * 3_600_000,
+                daily_days: 14,
+                weekly_weeks: 2
+            }
+        );
+        assert_eq!(Policy::parse("").unwrap(), Policy::default());
+        assert!(
+            Policy::parse("daily = 3")
+                .unwrap_err()
+                .contains("unknown setting daily")
+        );
+        assert!(
+            Policy::parse("\ndaily_days = -1")
+                .unwrap_err()
+                .starts_with("line 2")
         );
     }
 }
