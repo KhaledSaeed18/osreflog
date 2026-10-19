@@ -117,13 +117,6 @@ fn main() -> anyhow::Result<()> {
     engine.policy = retention_policy();
     let engine = Arc::new(engine);
     engine.start_summarizer();
-    if let Some(c) = engine
-        .boot_checkpoint_if_needed()
-        .context("taking the boot checkpoint")?
-    {
-        tracing::info!(id = c.id, "boot checkpoint");
-    }
-
     let top = engine.layout().top.clone();
     let subvolume = engine.layout().subvolume.clone();
     let capture = match osreflogd::capture::spawn(
@@ -144,6 +137,16 @@ fn main() -> anyhow::Result<()> {
             None
         }
     };
+    // The boot checkpoint after the live witness is up: at boot it takes 4 to 7 s on this
+    // laptop (the snapshot waits for btrfs to commit what boot wrote), and what changes
+    // meanwhile is attributed instead of falling in a gap (Q5). Before the bus name, so an
+    // offline update's pre-transaction checkpoint still comes after it.
+    if let Some(c) = engine
+        .boot_checkpoint_if_needed()
+        .context("taking the boot checkpoint")?
+    {
+        tracing::info!(id = c.id, "boot checkpoint");
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
