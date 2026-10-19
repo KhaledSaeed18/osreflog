@@ -28,6 +28,8 @@ that need no root on every push ([below](#on-every-push)).
 | Metal bisect works on this laptop | `scripts/p7/p7d-wifi.sh` | Wi-Fi power save regression found in **3 probes**, 6 reboots |
 | It installs from COPR on a fresh system | `scripts/p8/coprvm.sh` | fresh Fedora 44 Cloud VM, two boots: every check passed |
 | The hardened units leave everything working | `scripts/p8/hardening-check.sh` | install, doctor, testbed 16/16, write gate, live undo, 5/5 bisects, boot doctor: all pass; **nothing refused** by the filter |
+| What the kept snapshots hold is reported within bounds (0.3.0) | unit tests; `scripts/p2/it.sh` | unit tests pass; the loopback check (5 MiB held) **not yet run** as root |
+| The workers run in their own SELinux domains (0.3.0) | `scripts/p8/selinux-workers.sh` | module compiles (here and in CI); **not yet run** as root |
 | The history is tamper-evident | `osreflog verify` | the chain verified after every run above (711 entries after P5's) |
 
 ## The state witness (P2)
@@ -134,8 +136,12 @@ Said here so nobody has to find out the hard way.
 
 - **A week of real history.** The app has shown a few days of this laptop's history; the P8 exit
   asks for a week.
-- **Long-running cost.** No multi-day soak test of the daemon's CPU, memory and disk yet
-  ([performance](performance.md)).
+- **Long-running cost.** The first soak ended after 6.1 h (a restart, then a shutdown); the
+  second, which survives both, started 2026-10-20 and needs 48 h sampled
+  ([performance](performance.md#over-days)).
+- **0.3.0's root checks.** The space report against a real filesystem (`sudo scripts/p2/it.sh`),
+  the worker domains (`sudo scripts/p8/selinux-workers.sh`), and the live witness starting before
+  the boot checkpoint (a reboot after the install) are written and wait for a run as root.
 - **Replay soundness (Q9).** No seeded scenario needed an approximate replay; how often one
   differs from the true state needs real-world data.
 - **Other hardware and layouts.** One laptop, one btrfs layout (Fedora's default). No AMD, no
