@@ -238,3 +238,10 @@ Still to run: `sudo scripts/p8/selinux-workers.sh` with the domains enforcing, t
 ### 2026-10-20: the worker domains, enforcing
 
 `sudo scripts/p8/selinux-workers.sh` with both domains enforcing and dontaudit rules off for the run: module installed, ledger labeled, doctor ok, **testbed 16/16** (the stacked `OSREFLOG_CHECK_PARENT` works), **live undo all ok** (restored files keep their labels, the attic, the dnf delegation), the summarizer as `osreflog_summary_t` and the undo worker as `osreflog_undo_t`, and **no denial** for either, in the audit log or the journal.
+
+### 2026-10-20: 3.3 GiB, to be read
+
+After the root checks, `osreflog status` said the kept snapshots hold 3.3 GiB that `/` no longer has, counting from c000174 (the boot checkpoint, the first interval measured). The diffs since then wrote about 900 MiB in all. Released can exceed written (deleting writes nothing), but nothing deleted that much in sight: the Flatpak appstream refresh in c000174..c000175 is 121 MiB, mostly hardlinks to its repository, which count nothing. A likelier part is the SELinux policy store (`/var/lib/selinux`, 1,790 files replaced in c000174..c000175): every `semodule` transaction writes a new copy of the store and deletes the old, and the checks ran six of them. Whether 3.3 GiB is all real can't be read from the CLI, so:
+
+- `osreflog diff A..B` now says what the older side holds alone (`released_bytes` in the report), and the daemon logs, for each interval, how much it released and its five largest contributors;
+- `sudo scripts/p8/space-intervals.sh` prints every stored interval's written and released bytes from the ledger, read-only, to see which intervals the sum comes from.

@@ -370,6 +370,10 @@ pub struct DiffReport {
     pub stream_bytes: u64,
     pub commands: u64,
     pub changed_bytes: u64,
+    /// What the older side holds that the newer one lost (0.3.0 on; `None` for older diffs
+    /// and diffs to the live system).
+    #[serde(default)]
+    pub released_bytes: Option<u64>,
     pub counts: ClassCounts,
     pub packages: Vec<PackageChange>,
     pub transactions: Vec<Transaction>,

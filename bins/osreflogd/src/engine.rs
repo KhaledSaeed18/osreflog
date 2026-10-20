@@ -138,9 +138,14 @@ fn decode_packages(data: &[u8]) -> Option<Vec<Package>> {
 /// release and the old file as the snapshot has it: one `openat2` and `fstat` per changed
 /// file, resolved beneath the snapshot without following links. Only regular files count,
 /// and a file with other hard links releases nothing when one name goes.
-fn released_bytes(old_root: &File, changes: &[osreflog_btrfs::Change]) -> u64 {
+fn released_bytes(
+    old_root: &File,
+    changes: &[osreflog_btrfs::Change],
+) -> (u64, Vec<(String, u64)>) {
     use rustix::fs::{FileType, Mode, OFlags, ResolveFlags, fstat, openat2};
     let mut total = 0u64;
+    // The largest contributors, for the journal: an estimate that looks too big can be read.
+    let mut largest: Vec<(String, u64)> = Vec::new();
     for c in changes {
         let Some(from) = c.release.from() else {
             continue;
@@ -171,9 +176,15 @@ fn released_bytes(old_root: &File, changes: &[osreflog_btrfs::Change]) -> u64 {
         }
         let size = u64::try_from(st.st_size).unwrap_or(0);
         let allocated = u64::try_from(st.st_blocks).unwrap_or(0) * 512;
-        total = total.saturating_add(c.release.bytes(size, allocated));
+        let bytes = c.release.bytes(size, allocated);
+        total = total.saturating_add(bytes);
+        if bytes > 0 && (largest.len() < 5 || bytes > largest[largest.len() - 1].1) {
+            largest.push((from.to_owned(), bytes));
+            largest.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+            largest.truncate(5);
+        }
     }
-    total
+    (total, largest)
 }
 
 fn model_change(c: osreflog_btrfs::Change) -> Change {
@@ -405,7 +416,24 @@ impl Engine {
             .finish()
             .map_err(io("btrfs send"))?;
 
-        let released = released_bytes(&from_dir, &diff.changes);
+        let (released, largest) = released_bytes(&from_dir, &diff.changes);
+        if to.checkpoint_id.is_some() {
+            let largest: Vec<String> = largest
+                .iter()
+                .map(|(p, b)| format!("{p} {}", osreflog_model::bytes_text(*b)))
+                .collect();
+            tracing::info!(
+                released,
+                "{}: {} only the older snapshot holds; largest: {}",
+                from.name,
+                osreflog_model::bytes_text(released),
+                if largest.is_empty() {
+                    "none".to_owned()
+                } else {
+                    largest.join(", ")
+                }
+            );
+        }
         let mut changes: Vec<Change> = diff.changes.into_iter().map(model_change).collect();
         let rpm_changed = changes.iter().any(|c| c.path.starts_with(RPMDB_PREFIX));
         let history_changed = changes.iter().any(|c| c.path.starts_with(HISTORY_PREFIX));
@@ -1124,6 +1152,7 @@ fn report(
         stream_bytes: iv.stream_bytes,
         commands: iv.commands,
         changed_bytes: iv.changed_bytes,
+        released_bytes: iv.released_bytes,
         counts,
         packages: iv.packages,
         transactions: iv.transactions,

@@ -189,6 +189,12 @@ pub fn diff(r: &DiffReport, stat_only: bool) {
         r.compute_ms,
         if r.cached { ", cached" } else { "" }
     );
+    if let Some(b) = r.released_bytes {
+        println!(
+            "     {} only the older side holds now (deleted or replaced since)",
+            osreflog_model::bytes_text(b)
+        );
+    }
     for t in &r.transactions {
         println!("     {}", transaction_line(t));
     }

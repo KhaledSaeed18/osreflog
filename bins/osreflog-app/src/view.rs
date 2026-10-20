@@ -1021,6 +1021,7 @@ mod tests {
             stream_bytes: 1,
             commands: 1,
             changed_bytes: 1,
+            released_bytes: None,
             counts: ClassCounts {
                 config: 1,
                 state: 1,
