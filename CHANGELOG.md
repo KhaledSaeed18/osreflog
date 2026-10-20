@@ -4,17 +4,25 @@ What changed in each release, for people running osreflog. The design and the me
 behind each change are in [docs/journal/](docs/journal/). The release workflow takes a
 release's notes from its section here.
 
-## Unreleased
+## 0.3.0 (2026-10-20)
+
+What the snapshots cost, Flatpak and services counted right, and the workers confined.
+
+### Space and retention
 
 - `osreflog status` says how much space the kept snapshots hold that `/` no longer has, as a
   range (held for sure, held at most), measured from the diffs osreflog computes anyway; the
   app's status tooltip shows it too. `osreflog doctor` warns when the snapshots surely hold more
   than the free space. Diffs from earlier versions didn't measure it, so the range counts from
-  the first checkpoint after the upgrade until those snapshots are pruned.
-- `osreflog-selinux` has domains for osreflogd's two workers: the summarizer (which parses
-  untrusted content) may only talk to the daemon over its pipes; the undo worker may write the
-  files it puts back and the attic, but has no network or exec. osreflogd asks for them when it
-  starts a worker, and runs it as itself when the module isn't installed.
+  the first checkpoint after the upgrade until those snapshots are pruned. `osreflog diff A..B`
+  says what the older side holds alone.
+- Retention can be set in `/etc/osreflog/retention.conf` (hours to keep everything, days of
+  dailies, weeks of weeklies). The file ships with the defaults, commented out.
+
+### Recording
+
+- The live witness starts before the boot checkpoint, which takes several seconds at boot:
+  changes made meanwhile get causes instead of falling into a gap.
 - Writes in Flatpak's system installation (`/var/lib/flatpak`) are one `flatpak` cause that
   counts its paths without listing them, as the README always said, and are noise in diffs. An
   appstream refresh had been recorded path by path as an "unknown" cause: 41,000 rows, 96% of
@@ -24,8 +32,13 @@ release's notes from its section here.
   they were "unknown" causes named after the executable.
 - DHCP lease renewals (`/var/lib/NetworkManager/internal-*`) and abrt's journal cursor are
   noise: state rewritten on a schedule, like rsyslog's cursor.
-- Retention can be set in `/etc/osreflog/retention.conf` (hours to keep everything, days of
-  dailies, weeks of weeklies). The file ships with the defaults, commented out.
+
+### Hardening and dependencies
+
+- `osreflog-selinux` has domains for osreflogd's two workers: the summarizer (which parses
+  untrusted content) may only talk to the daemon over its pipes; the undo worker may write the
+  files it puts back and the attic, but has no network or exec. osreflogd asks for them when it
+  starts a worker, and runs it as itself when the module isn't installed. Both enforce.
 - D-Bus is on zbus 6 (daemon, CLI, app and user agent); zbus 5's separate zvariant, zbus_names
   and zvariant_derive crates, now unmaintained, are gone from the build.
 

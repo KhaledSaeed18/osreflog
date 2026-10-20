@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "gtk4",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-bisect"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-boot"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "osreflog-rpm",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-btrfs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rustix",
  "tempfile",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "osreflog-bisect",
  "osreflog-model",
@@ -1024,14 +1024,14 @@ dependencies = [
 
 [[package]]
 name = "osreflog-fanotify"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "osreflog-fuzz"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "fastrand",
  "osreflog-btrfs",
@@ -1046,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-ledger"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "osreflog-model",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-model"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-rpm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "osreflog-model",
  "rusqlite",
@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-semantic"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "serde",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-undo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "osreflog-model",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "osreflog-user"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "osreflogd"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "aya",

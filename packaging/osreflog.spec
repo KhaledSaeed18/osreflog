@@ -2,7 +2,7 @@
 %global selinuxtype targeted
 
 Name:           osreflog
-Version:        0.2.0
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        System change history for Fedora: what changed, what changed it, and undo
 
@@ -181,6 +181,13 @@ fi
 %{_datadir}/selinux/devel/include/distributed/osreflog.if
 
 %changelog
+* Tue Oct 20 2026 Khaled Saeed <khaled18saeed@gmail.com> - 0.3.0-1
+- What the kept snapshots hold, in status and doctor; retention in /etc/osreflog/retention.conf
+- The live witness starts before the boot checkpoint
+- Flatpak writes are one counted cause; services in sub-slices are unit causes
+- osreflog-selinux: enforcing domains for the summary and undo workers
+- zbus 6
+
 * Sat Oct 17 2026 Khaled Saeed <khaled18saeed@gmail.com> - 0.2.0-1
 - The app: the open row marked, search, page headers, colored line diffs, animated loading,
   toasts, keyboard shortcuts; needs libadwaita 1.6

@@ -45,7 +45,7 @@ osreflog doctor
   ok    / is btrfs subvolume /root
   ok    dnf5 actions plugin installed
   ok    checkpoint hook installed (/etc/dnf/libdnf5-plugins/actions.d/osreflog.actions)
-  ok    osreflogd 0.2.0 running, 1 checkpoints, 1 snapshots kept
+  ok    osreflogd 0.3.0 running, 1 checkpoints, 1 snapshots kept
   ok    ledger chain verified (3 entries)
 ```
 
