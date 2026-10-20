@@ -28,7 +28,7 @@ that need no root on every push ([below](#on-every-push)).
 | Metal bisect works on this laptop | `scripts/p7/p7d-wifi.sh` | Wi-Fi power save regression found in **3 probes**, 6 reboots |
 | It installs from COPR on a fresh system | `scripts/p8/coprvm.sh` | fresh Fedora 44 Cloud VM, two boots: every check passed |
 | The hardened units leave everything working | `scripts/p8/hardening-check.sh` | install, doctor, testbed 16/16, write gate, live undo, 5/5 bisects, boot doctor: all pass; **nothing refused** by the filter |
-| What the kept snapshots hold is reported within bounds (0.3.0) | unit tests; `scripts/p2/it.sh` | 4 MiB deleted, 1 MiB written over, 1 MiB appended: **5.02 MiB** held (5 MiB and the small files), bounds equal |
+| What the kept snapshots hold is reported within bounds (0.3.0) | unit tests; `scripts/p2/it.sh` | 4 MiB deleted, 1 MiB written over, 1 MiB appended: **5,275,648 bytes** held (5 MiB and eight 4 KiB blocks of small files), bounds equal; the scattered-writes overcount found on the laptop is fixed |
 | The workers run in their own SELinux domains (0.3.0) | `scripts/p8/selinux-workers.sh` | enforcing, dontaudit off: testbed 16/16, live undo all ok, both workers in their domains, **0 denials** |
 | The history is tamper-evident | `osreflog verify` | the chain verified after every run above (711 entries after P5's) |
 
