@@ -29,7 +29,7 @@ that need no root on every push ([below](#on-every-push)).
 | It installs from COPR on a fresh system | `scripts/p8/coprvm.sh` | fresh Fedora 44 Cloud VM, two boots: every check passed |
 | The hardened units leave everything working | `scripts/p8/hardening-check.sh` | install, doctor, testbed 16/16, write gate, live undo, 5/5 bisects, boot doctor: all pass; **nothing refused** by the filter |
 | What the kept snapshots hold is reported within bounds (0.3.0) | unit tests; `scripts/p2/it.sh` | 4 MiB deleted, 1 MiB written over, 1 MiB appended: **5.02 MiB** held (5 MiB and the small files), bounds equal |
-| The workers run in their own SELinux domains (0.3.0) | `scripts/p8/selinux-workers.sh` | permissive run: both workers in their domains, **one denial** (fixed); the enforcing run is still to come |
+| The workers run in their own SELinux domains (0.3.0) | `scripts/p8/selinux-workers.sh` | enforcing, dontaudit off: testbed 16/16, live undo all ok, both workers in their domains, **0 denials** |
 | The history is tamper-evident | `osreflog verify` | the chain verified after every run above (711 entries after P5's) |
 
 ## The state witness (P2)
@@ -139,8 +139,8 @@ Said here so nobody has to find out the hard way.
 - **Long-running cost.** The first soak ended after 6.1 h (a restart, then a shutdown); the
   second, which survives both, started 2026-10-20 and needs 48 h sampled
   ([performance](performance.md#over-days)).
-- **0.3.0's last root checks.** The worker domains enforcing (`sudo scripts/p8/selinux-workers.sh`)
-  and the live witness starting before the boot checkpoint (a reboot after the install).
+- **The boot order of 0.3.0** (the live witness before the boot checkpoint): checked at the next
+  reboot.
 - **Replay soundness (Q9).** No seeded scenario needed an approximate replay; how often one
   differs from the true state needs real-world data.
 - **Other hardware and layouts.** One laptop, one btrfs layout (Fedora's default). No AMD, no

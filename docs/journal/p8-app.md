@@ -234,3 +234,7 @@ It runs the loopback engine test (schema 6 and the 5 MiB space check), installs 
 - **Seeded bisect: 5/5** with the workers' new start path.
 
 Still to run: `sudo scripts/p8/selinux-workers.sh` with the domains enforcing, then a reboot for the boot order.
+
+### 2026-10-20: the worker domains, enforcing
+
+`sudo scripts/p8/selinux-workers.sh` with both domains enforcing and dontaudit rules off for the run: module installed, ledger labeled, doctor ok, **testbed 16/16** (the stacked `OSREFLOG_CHECK_PARENT` works), **live undo all ok** (restored files keep their labels, the attic, the dnf delegation), the summarizer as `osreflog_summary_t` and the undo worker as `osreflog_undo_t`, and **no denial** for either, in the audit log or the journal.
