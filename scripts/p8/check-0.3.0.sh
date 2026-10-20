@@ -5,7 +5,7 @@
 #       && cargo test -p osreflogd --test loopback --no-run                    # as your user
 #   sudo scripts/p8/check-0.3.0.sh 2>&1 | tee perf-out/check-0.3.0.log
 #
-# 1. the loopback engine test (scripts/p2/it.sh): the ledger's schema 6, and the space report
+# 1. the loopback engine test (scripts/p2/it.sh): the ledger's schema 7, and the space report
 #    on a real btrfs (4 MiB deleted + 1 MiB written over + 1 MiB appended = 5 MiB held);
 # 2. the worker domains (scripts/p8/selinux-workers.sh): installs the module and this build,
 #    runs the testbed and the live undo workload, collects the denials;
@@ -36,7 +36,7 @@ step() {
 since=$(date '+%Y-%m-%d %H:%M:%S')
 # The testbed's causes are labeled with this script's command line (the session's top command).
 export OSREFLOG_CHECK_PARENT=check-0.3.0
-step "loopback engine test (schema 6, space)" scripts/p2/it.sh
+step "loopback engine test (schema 7, space)" scripts/p2/it.sh
 step "worker domains" scripts/p8/selinux-workers.sh
 step "seeded bisect" scripts/p6/seeded.sh
 echo "=== status and doctor"

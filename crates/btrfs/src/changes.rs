@@ -76,10 +76,12 @@ pub enum Release {
     Nothing,
     /// All of it: deleted, or replaced by a new file renamed over it.
     Whole { from: String },
-    /// The byte ranges written over, and the size it was cut to (written in place).
+    /// The byte ranges written over, and the size it was cut to (written in place). With too
+    /// many ranges to keep, `written` has the bytes written instead.
     Part {
         from: String,
         ranges: Vec<(u64, u64)>,
+        written: Option<u64>,
         truncated_to: Option<u64>,
     },
 }
@@ -103,23 +105,42 @@ impl Release {
             Release::Whole { .. } => return old_allocated,
             Release::Part {
                 ranges,
+                written,
                 truncated_to,
                 ..
             } => {
                 let keep = truncated_to.map_or(old_size, |t| t.min(old_size));
-                let over: u64 = ranges
-                    .iter()
-                    .map(|&(start, end)| end.min(keep).saturating_sub(start))
-                    .sum();
-                over + (old_size - keep)
+                if let &Some(written) = written {
+                    return (written.min(keep) + (old_size - keep)).min(old_allocated);
+                }
+                // Whole blocks, without counting a block twice where two ranges share it.
+                let mut over = 0u64;
+                let mut counted_to = 0u64;
+                for &(start, end) in ranges {
+                    let end = end.min(keep);
+                    if end <= start {
+                        continue;
+                    }
+                    let first = (start / BLOCK * BLOCK).max(counted_to);
+                    let last = end.div_ceil(BLOCK) * BLOCK;
+                    over += last.saturating_sub(first);
+                    counted_to = counted_to.max(last);
+                }
+                over.min(keep.div_ceil(BLOCK) * BLOCK) + (old_size - keep)
             }
         };
         released.min(old_allocated)
     }
 }
 
-/// Ranges kept per file before they are merged into one span: bounds memory on huge diffs.
-const MAX_RANGES: usize = 64;
+/// Ranges kept per file (64 KiB at most). Past this the ranges are dropped and the bytes
+/// written are counted instead, which can't exceed what was written. Merging them into one
+/// span, as at first, made a 40 MiB journal file with a few KiB written all over it count as
+/// 40 MiB released, every interval.
+const MAX_RANGES: usize = 4096;
+
+/// btrfs copies whole blocks on write: a range released is counted in blocks of this size.
+const BLOCK: u64 = 4096;
 
 /// Adds `[start, end)` to sorted, disjoint ranges, merging what touches.
 fn add_range(ranges: &mut Vec<(u64, u64)>, start: u64, end: u64) {
@@ -138,11 +159,6 @@ fn add_range(ranges: &mut Vec<(u64, u64)>, start: u64, end: u64) {
     });
     let at = ranges.partition_point(|&(a, _)| a < start);
     ranges.insert(at, (start, end));
-    if ranges.len() > MAX_RANGES {
-        let span = (ranges[0].0, ranges[ranges.len() - 1].1);
-        ranges.clear();
-        ranges.push(span);
-    }
 }
 
 /// What the stream says about itself.
@@ -165,6 +181,8 @@ struct Node {
     bytes: u64,
     /// Byte ranges written in place, and the smallest size it was truncated to.
     ranges: Vec<(u64, u64)>,
+    /// More than [`MAX_RANGES`]: `ranges` dropped, the bytes written count instead.
+    too_many_ranges: bool,
     truncated_to: Option<u64>,
 }
 
@@ -251,6 +269,7 @@ impl ChangeSetBuilder {
                 flags: 0,
                 bytes: 0,
                 ranges: Vec::new(),
+                too_many_ranges: false,
                 truncated_to: None,
             },
         );
@@ -284,6 +303,7 @@ impl ChangeSetBuilder {
                     flags: 0,
                     bytes: 0,
                     ranges: Vec::new(),
+                    too_many_ranges: false,
                     truncated_to: None,
                 },
             );
@@ -298,8 +318,14 @@ impl ChangeSetBuilder {
         let node = self.touch(&path);
         node.flags |= flags::CONTENT;
         node.bytes = node.bytes.saturating_add(len);
-        if let Some(offset) = offset {
+        if let Some(offset) = offset
+            && !node.too_many_ranges
+        {
             add_range(&mut node.ranges, offset, offset.saturating_add(len));
+            if node.ranges.len() > MAX_RANGES {
+                node.ranges = Vec::new();
+                node.too_many_ranges = true;
+            }
         }
         if node.kind == Kind::Unknown {
             node.kind = Kind::File;
@@ -322,6 +348,7 @@ impl ChangeSetBuilder {
                 flags: 0,
                 bytes: 0,
                 ranges: Vec::new(),
+                too_many_ranges: false,
                 truncated_to: None,
             },
         };
@@ -393,6 +420,7 @@ impl ChangeSetBuilder {
                 Some(origin) if node.flags & flags::CONTENT != 0 => Release::Part {
                     from: format!("/{origin}"),
                     ranges: node.ranges,
+                    written: node.too_many_ranges.then_some(node.bytes),
                     truncated_to: node.truncated_to,
                 },
                 _ => Release::Nothing,
@@ -625,8 +653,8 @@ mod tests {
             panic!("in place")
         };
         assert_eq!(ranges, [(0, 150), (4000, 4096)]);
-        // Old size 4000: the append releases nothing.
-        assert_eq!(release("/var/db/data").bytes(4000, 4096), 150);
+        // Old size 4000: the append releases nothing; the overwrite is one block.
+        assert_eq!(release("/var/db/data").bytes(4000, 8192), 4096);
         assert_eq!(
             release("/etc/hosts"),
             Release::Whole {
@@ -660,11 +688,11 @@ mod tests {
         assert_eq!(big.bytes(5000, 8192), 4000);
         let f = &cs.iter().find(|c| c.path == "/opt/b/f").unwrap().release;
         assert_eq!(f.from(), Some("/opt/a/f"));
-        assert_eq!(f.bytes(100, 4096), 10);
+        assert_eq!(f.bytes(100, 4096), 4096);
     }
 
     #[test]
-    fn ranges_merge_and_stay_bounded() {
+    fn ranges_merge() {
         let mut r = Vec::new();
         add_range(&mut r, 10, 20);
         add_range(&mut r, 30, 40);
@@ -673,7 +701,29 @@ mod tests {
         for i in 0..100u64 {
             add_range(&mut r, 1000 + i * 10, 1000 + i * 10 + 1);
         }
-        assert!(r.len() <= MAX_RANGES);
         assert_eq!((r[0].0, r[r.len() - 1].1), (10, 1991));
+    }
+
+    #[test]
+    fn a_file_written_all_over_isnt_counted_whole() {
+        // journald: 16 bytes in each of 1,000 places, 40 KiB apart, in a 40 MiB file: one
+        // block each.
+        let mut writer = StreamWriter::new(2);
+        for i in 0..1000u64 {
+            writer = writer.update_extent("var/log/journal/x/system.journal", i * 40 * 1024, 16);
+        }
+        let cs = changes(&writer.finish());
+        assert_eq!(cs[0].release.bytes(40 << 20, 40 << 20), 1000 * 4096);
+        // 10,000 places: too many to keep; the bytes written count, not the file.
+        let mut writer = StreamWriter::new(2);
+        for i in 0..10_000u64 {
+            writer = writer.update_extent("var/log/journal/x/system.journal", i * 4096, 16);
+        }
+        let cs = changes(&writer.finish());
+        let Release::Part { written, .. } = &cs[0].release else {
+            panic!("in place")
+        };
+        assert_eq!(*written, Some(160_000));
+        assert_eq!(cs[0].release.bytes(40 << 20, 40 << 20), 160_000);
     }
 }

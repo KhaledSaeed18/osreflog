@@ -15,7 +15,7 @@ use osreflog_model::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -176,6 +176,11 @@ CREATE TABLE interval_space (
     released_bytes INTEGER NOT NULL
 );
 ";
+
+/// v6 → v7: forget releases measured while a file written in many places counted whole (the
+/// first 0.3.0 builds, on the development laptop only); the space report counts again from
+/// the next interval.
+const SCHEMA_V7: &str = "DELETE FROM interval_space;";
 
 /// A dconf key with its value before and after a change (`None`: unset).
 pub type DconfValue = (String, Option<String>, Option<String>);
@@ -404,6 +409,9 @@ impl Ledger {
         }
         if version < 6 {
             conn.execute_batch(SCHEMA_V6)?;
+        }
+        if version < 7 {
+            conn.execute_batch(SCHEMA_V7)?;
         }
         if version < SCHEMA_VERSION {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
