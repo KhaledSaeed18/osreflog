@@ -10,8 +10,8 @@
 # One run, between two checkpoints noted "scripted history, run N start/end":
 #   1. dnf upgrade --refresh: the machine's real pending updates (skip with --no-upgrade);
 #   2. a package installed and removed with dnf (cowsay);
-#   3. a Flatpak app installed and removed (org.gnome.clocks from flathub, skipped offline or
-#      when it is already installed): one counted cause each way;
+#   3. a Flatpak app installed and removed (org.gnome.clocks from flathub, skipped offline, when
+#      it is already installed, or when its runtime isn't): one counted cause each way;
 #   4. the P3 workload: ~22 admin tools change /etc, each change reverted;
 #   5. the P5 undo workload: changes found by cause and undone with `osreflog undo`;
 #   6. doctor and status.
@@ -42,8 +42,13 @@ dnf_pair() {
 }
 flatpak_pair() {
     if flatpak info --system "$APP" >/dev/null 2>&1; then echo "$APP already installed: skipped"; return 0; fi
-    if ! flatpak remote-info --system flathub "$APP" >/dev/null 2>&1; then
-        echo "flathub unreachable: skipped"; return 0
+    local runtime
+    runtime=$(flatpak remote-info --system flathub "$APP" 2>/dev/null | sed -n 's/^ *Runtime: //p')
+    if [ -z "$runtime" ]; then echo "flathub unreachable: skipped"; return 0; fi
+    # Uninstalling the app leaves its runtime behind (GNOME's is ~1 GB with its GL extension),
+    # so the step only runs when that runtime is already here.
+    if ! flatpak info --system "$runtime" >/dev/null 2>&1; then
+        echo "$runtime not installed: skipped (it would stay behind)"; return 0
     fi
     flatpak install -y --noninteractive --system flathub "$APP" && sleep 3 \
         && flatpak uninstall -y --noninteractive --system "$APP"
