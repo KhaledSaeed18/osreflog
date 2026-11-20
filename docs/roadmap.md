@@ -110,7 +110,7 @@ Before any probe boots on real hardware ([journal](./journal/p7-metal.md)):
 ## P8: GNOME app, packaging, hardening
 - [x] SELinux policy module (types for the ledger and runtime files; domains for the summary and undo workers, permissive until their denials are collected); systemd hardening audit (`systemd-analyze security`, held by CI)
 - [x] COPR packaging (Fedora 44, 45, rawhide), RPM with the dnf actions file, units, polkit, D-Bus config; GitHub releases built by CI
-- [x] Docs: [install](./install.md), [troubleshooting](./troubleshooting.md), [validation](./validation.md), [performance](./performance.md); the [what changes](./research/what-changes.md) research note (first reading over 4.6 days; the month's reading from 2026-11-15)
+- [x] Docs: [install](./install.md), [troubleshooting](./troubleshooting.md), [validation](./validation.md), [performance](./performance.md); the [what changes](./research/what-changes.md) research note (one reading over 4.6 days; no month's reading, since this laptop is off most of the time)
 - [x] GTK4/libadwaita app (P8a–P8d)
 
-**Exit:** installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history.
+**Exit:** installable from COPR on a fresh Fedora 44 VM; `osreflog doctor` is clean; the app shows a real week of history. **Amended** (2026-11-20): like P3's week of dogfooding, a week of use can't happen on a development laptop that is switched off between projects (it was off from 2026-10-20 to 2026-11-20). The app shows instead a history made by real tools over a few development sessions on different days, one run of `scripts/p8/history.sh` each (dnf upgrade, a package and a Flatpak app in and out, the P3 admin tools, the P5 undos, then the P4 settings workload as the user); the screenshots come from that history.

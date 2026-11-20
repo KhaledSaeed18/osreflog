@@ -5,9 +5,11 @@ This note reads it to answer the question in the [vision](../vision.md): how man
 whom, and which paths churn. It also checks osreflog itself: whatever floods the history or
 lands in the wrong place shows up here first.
 
-**First reading: 4.6 days**, 2026-10-15 to 2026-10-20, on the development laptop (Fedora 44
-Workstation, one user, GNOME). The title promises a month. The same script runs again once the
-history holds one (from 2026-11-15), and its tables replace these.
+**One reading: 4.6 days**, 2026-10-15 to 2026-10-20, on the development laptop (Fedora 44
+Workstation, one user, GNOME). The script reads a month, but there won't be one to read here:
+the laptop is a development machine, switched off between projects (from 2026-10-20 to
+2026-11-20, for one). A month of desktop use has to come from other people's machines, the same
+real-world data Q9 waits for ([open questions](../open-questions.md)).
 
 ## How it was read
 
@@ -85,7 +87,7 @@ rather than in not recording them.
 
 ## Limits
 
-- 4.6 days, not a month, on one development laptop; half the raw history was osreflog's own
+- 4.6 days, not a month, on one development laptop that sees no everyday use; half the raw history was osreflog's own
   testing, and telling it apart is a heuristic.
 - The live witness doesn't see what happens while the daemon is stopped (boots, upgrades of
   osreflog itself); the state witness records those changes, without a cause, and this note

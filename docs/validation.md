@@ -135,11 +135,14 @@ osreflog's first writes to the system, gated before they shipped. [Journal](jour
 
 Said here so nobody has to find out the hard way.
 
-- **A week of real history.** The app has shown a few days of this laptop's history; the P8 exit
-  asks for a week.
+- **A week of everyday use.** This laptop is a development machine, switched off between
+  projects, so nobody's week of use has gone through osreflog. The P8 exit was amended to a
+  history made by real tools over a few sessions (`scripts/p8/history.sh`,
+  [roadmap](roadmap.md#p8-gnome-app-packaging-hardening)); how the history reads after months
+  of someone's daily use is unknown.
 - **Long-running cost.** The first soak ended after 6.1 h (a restart, then a shutdown); the
-  second, which survives both, started 2026-10-20 and needs 48 h sampled
-  ([performance](performance.md#over-days)).
+  second, which survives both, started 2026-10-20 and had 28.6 h of the 48 sampled by
+  2026-11-20, the machine having been off in between ([performance](performance.md#over-days)).
 - **Replay soundness (Q9).** No seeded scenario needed an approximate replay; how often one
   differs from the true state needs real-world data.
 - **Other hardware and layouts.** One laptop, one btrfs layout (Fedora's default). No AMD, no
